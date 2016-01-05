@@ -8,7 +8,7 @@ var light;
 // array of functions for the rendering loop
 var onRenderFcts = [];
 var Vector3 = THREE.Vector3
-var orderLevel = 2
+var orderLevel = 10
 
 var planet = {};
 var planetMesh;
@@ -17,7 +17,7 @@ var wireframe = false;
 
 window.onload = function(){
     initializeScene();
-    generatePlanet();
+    generatePlanet(20);
     renderScene();      
 }
 
@@ -87,13 +87,14 @@ function renderScene(){
 
 
 
-function generatePlanet(){
+function generatePlanet(topologyDistortionRate){
 
     //generate subdivided icosahedron
     planet.topology = generateSubdividedIcosahedron(orderLevel);
 
     // distort mesh
-    rotateEdge(planet.topology,89)
+    distortMesh(planet.topology, topologyDistortionRate);
+    relaxMesh(planet.topology, 0.5)
 
     // calculate centroids 
     centroids(planet.topology)
@@ -572,40 +573,14 @@ function generatePlanetTiledTopology(topology){
    return  { corners: corners, borders: borders, tiles: tiles };
 }
 
-//
-function rotateEdge(mesh, edgeIndex){
+function distortMesh(mesh, degree){
+    var totalSurfaceArea = 4 * Math.PI;
+    var idealFaceArea = totalSurfaceArea / mesh.faces.length;
+    var idealEdgeLength = Math.sqrt(idealFaceArea * 4 / Math.sqrt(3));
+    var idealFaceHeight = idealEdgeLength * Math.sqrt(3) / 2;
 
-    //var edgeIndex = Math.floor(Math.random()*planet.topology.edges.length);
-    var edge = mesh.edges[edgeIndex];
-    var face0 = mesh.faces[edge.f[0]];
-    var face1 = mesh.faces[edge.f[1]];
-    var farNodeFaceIndex0 = getFaceOppositeNodeIndex(face0, edge);
-    var farNodeFaceIndex1 = getFaceOppositeNodeIndex(face1, edge);
-
-    var newNodeIndex0 = face0.n[farNodeFaceIndex0];
-
-    var oldNodeIndex0 = face0.n[(farNodeFaceIndex0 + 1) % 3];
-    var newNodeIndex1 = face1.n[farNodeFaceIndex1];
-
-    var oldNodeIndex1 = face1.n[(farNodeFaceIndex1 + 1) % 3];
-
-    var oldNode0 = mesh.nodes[oldNodeIndex0];
-
-    var oldNode1 = mesh.nodes[oldNodeIndex1];
-
-    var newNode0 = mesh.nodes[newNodeIndex0];
-
-    var newNode1 = mesh.nodes[newNodeIndex1];
-
-    var newEdgeIndex0 = face1.e[(farNodeFaceIndex1 + 2) % 3];
-
-    var newEdgeIndex1 = face0.e[(farNodeFaceIndex0 + 2) % 3];
-
-    var newEdge0 = mesh.edges[newEdgeIndex0];
-
-    var newEdge1 = mesh.edges[newEdgeIndex1];
-
-    var predicate = function(oldNode0, oldNode1, newNode0, newNode1){
+    var rotationPredicate = function(oldNode0, oldNode1, newNode0, newNode1)
+    {
         if (newNode0.f.length >= 7 ||
             newNode1.f.length >= 7 ||
             oldNode0.f.length <= 5 ||
@@ -624,12 +599,131 @@ function rotateEdge(mesh, edgeIndex){
         if (v0.dot(v3) < 0.2 || v0.dot(v4) < 0.2) return false;
         return true;
     };
+    
+    var i = 0;
+    for(var i = 0;i<degree;i++){
+        if (i >= degree) return;
+        
+        var consecutiveFailedAttempts = 0;
+        var edgeIndex = Math.floor(Math.random()*mesh.edges.length);
+        while (!conditionalRotateEdge(mesh, edgeIndex, rotationPredicate))
+        {
+            if (++consecutiveFailedAttempts >= mesh.edges.length) return false;
+            edgeIndex = (edgeIndex + 1) % mesh.edges.length;
+        }
+    }
+
+    return true;
+}
+
+function relaxMesh(mesh, multiplier){
+    var totalSurfaceArea = 4 * Math.PI;
+    var idealFaceArea = totalSurfaceArea / mesh.faces.length;
+    var idealEdgeLength = Math.sqrt(idealFaceArea * 4 / Math.sqrt(3));
+    var idealDistanceToCentroid = idealEdgeLength * Math.sqrt(3) / 3 * 0.9;
+    
+    var pointShifts = new Array(mesh.nodes.length);
+    for (var i = 0; i < mesh.nodes.length; ++i)
+        pointShifts[i] = new Vector3(0, 0, 0);
+
+    for (var i = 0; i < mesh.faces.length; ++i){
+
+        var face = mesh.faces[i];
+        var n0 = mesh.nodes[face.n[0]];
+        var n1 = mesh.nodes[face.n[1]];
+        var n2 = mesh.nodes[face.n[2]];
+        var p0 = n0.p;
+        var p1 = n1.p;
+        var p2 = n2.p;
+        var e0 = p1.distanceTo(p0) / idealEdgeLength;
+        var e1 = p2.distanceTo(p1) / idealEdgeLength;
+        var e2 = p0.distanceTo(p2) / idealEdgeLength;
+        var centroid = calculateFaceCentroid(p0, p1, p2).normalize();
+        var v0 = centroid.clone().sub(p0);
+        var v1 = centroid.clone().sub(p1);
+        var v2 = centroid.clone().sub(p2);
+        var length0 = v0.length();
+        var length1 = v1.length();
+        var length2 = v2.length();
+        v0.multiplyScalar(multiplier * (length0 - idealDistanceToCentroid) / length0);
+        v1.multiplyScalar(multiplier * (length1 - idealDistanceToCentroid) / length1);
+        v2.multiplyScalar(multiplier * (length2 - idealDistanceToCentroid) / length2);
+        pointShifts[face.n[0]].add(v0);
+        pointShifts[face.n[1]].add(v1);
+        pointShifts[face.n[2]].add(v2);
+    }
+    
+    
+    var origin = new Vector3(0, 0, 0);
+    var plane = new THREE.Plane();
+
+        for (var i = 0; i < mesh.nodes.length; ++i)
+        {
+            plane.setFromNormalAndCoplanarPoint(mesh.nodes[i].p, origin);
+            pointShifts[i] = mesh.nodes[i].p.clone().add(plane.projectPoint(pointShifts[i])).normalize();
+        }
+
+    var rotationSupressions = new Array(mesh.nodes.length);
+    for (var i = 0; i < mesh.nodes.length; ++i)
+        rotationSupressions[i] = 0;
+    
+    var i = 0;
+    for (var i = 0; i < mesh.edges.length; ++i){
+        var edge = mesh.edges[i];
+        var oldPoint0 = mesh.nodes[edge.n[0]].p;
+        var oldPoint1 = mesh.nodes[edge.n[1]].p;
+        var newPoint0 = pointShifts[edge.n[0]];
+        var newPoint1 = pointShifts[edge.n[1]];
+        var oldVector = oldPoint1.clone().sub(oldPoint0).normalize();
+        var newVector = newPoint1.clone().sub(newPoint0).normalize();
+        var suppression = (1 - oldVector.dot(newVector)) * 0.5;
+        rotationSupressions[edge.n[0]] = Math.max(rotationSupressions[edge.n[0]], suppression);
+        rotationSupressions[edge.n[1]] = Math.max(rotationSupressions[edge.n[1]], suppression);
+    }
+
+    
+    var totalShift = 0;
+
+        for (var i = 0; i < mesh.nodes.length; ++i)
+        {
+            var node = mesh.nodes[i];
+            var point = node.p;
+            var delta = point.clone();
+            point.lerp(pointShifts[i], 1 - Math.sqrt(rotationSupressions[i])).normalize();
+            delta.sub(point);
+            totalShift += delta.length();
+        }
+
+    
+    return totalShift;
+}
+
+//
+function conditionalRotateEdge(mesh, edgeIndex, predicate){
+
+    //var edgeIndex = Math.floor(Math.random()*planet.topology.edges.length);
+    var edge = mesh.edges[edgeIndex];
+    var face0 = mesh.faces[edge.f[0]];
+    var face1 = mesh.faces[edge.f[1]];
+    var farNodeFaceIndex0 = getFaceOppositeNodeIndex(face0, edge);
+    var farNodeFaceIndex1 = getFaceOppositeNodeIndex(face1, edge);
+    var newNodeIndex0 = face0.n[farNodeFaceIndex0];
+    var oldNodeIndex0 = face0.n[(farNodeFaceIndex0 + 1) % 3];
+    var newNodeIndex1 = face1.n[farNodeFaceIndex1];
+    var oldNodeIndex1 = face1.n[(farNodeFaceIndex1 + 1) % 3];
+    var oldNode0 = mesh.nodes[oldNodeIndex0];
+    var oldNode1 = mesh.nodes[oldNodeIndex1];
+    var newNode0 = mesh.nodes[newNodeIndex0];
+    var newNode1 = mesh.nodes[newNodeIndex1];
+    var newEdgeIndex0 = face1.e[(farNodeFaceIndex1 + 2) % 3];
+    var newEdgeIndex1 = face0.e[(farNodeFaceIndex0 + 2) % 3];
+    var newEdge0 = mesh.edges[newEdgeIndex0];
+    var newEdge1 = mesh.edges[newEdgeIndex1];
 
     if (!predicate(oldNode0, oldNode1, newNode0, newNode1)) return false;
     
-    oldNode0.e.splice(oldNode1.e.indexOf(edgeIndex), 1);
-
-    oldNode1.e.splice(oldNode0.e.indexOf(edgeIndex), 1);
+    oldNode0.e.splice(oldNode0.e.indexOf(edgeIndex), 1);
+    oldNode1.e.splice(oldNode1.e.indexOf(edgeIndex), 1);
     newNode0.e.push(edgeIndex);
     newNode1.e.push(edgeIndex);
 
@@ -643,8 +737,8 @@ function rotateEdge(mesh, edgeIndex){
     
     oldNode0.f.splice(oldNode0.f.indexOf(edge.f[1]), 1);
     oldNode1.f.splice(oldNode1.f.indexOf(edge.f[0]), 1);
-    newNode0.f.push(edge.f[0]);
-    newNode1.f.push(edge.f[1]);
+    newNode0.f.push(edge.f[1]);
+    newNode1.f.push(edge.f[0]);
     
     face0.n[(farNodeFaceIndex0 + 2) % 3] = newNodeIndex1;
     face1.n[(farNodeFaceIndex1 + 2) % 3] = newNodeIndex0;
@@ -722,7 +816,7 @@ function generatePlanetMesh(){
         side:THREE.DoubleSide 
     }); 
     var material = new THREE.MeshNormalMaterial();
-    var material = new THREE.MeshLambertMaterial({ color: new THREE.Color(0x000000), ambient: new THREE.Color(0xFFFFFF), vertexColors: THREE.VertexColors, });
+    //var material = new THREE.MeshLambertMaterial({ color: new THREE.Color(0x000000), ambient: new THREE.Color(0xFFFFFF), vertexColors: THREE.VertexColors, });
 
     var mesh    = new THREE.Mesh(planet.geometry ,material);
 
@@ -786,7 +880,29 @@ function checkKey(e) {
         addLight();
     }
     else if ((e.keyCode == '84')){
-        rotateEdge(planet.topology,89)
+        for( var i = scene.children.length - 1; i >= 0; i--) {obj = scene.children[i];scene.remove(obj);}
+        distortMesh(planet.topology,1);
+        centroids(planet.topology)
+        reorderTriangleNodes(planet.topology)
+        planet.tiledTopology = generatePlanetTiledTopology(planet.topology);
+        //setRandomColors()
+        planet.geometry = generatePlanetTiledGeometry();
+        planetMesh = generatePlanetMesh();
+        scene.add(planetMesh)
+        addLight();
+
+    }
+    else if ((e.keyCode == '71')){
+        for( var i = scene.children.length - 1; i >= 0; i--) {obj = scene.children[i];scene.remove(obj);}
+        relaxMesh(planet.topology,1);
+        centroids(planet.topology)
+        reorderTriangleNodes(planet.topology)
+        planet.tiledTopology = generatePlanetTiledTopology(planet.topology);
+        //setRandomColors()
+        planet.geometry = generatePlanetTiledGeometry();
+        planetMesh = generatePlanetMesh();
+        scene.add(planetMesh)
+        addLight();
 
     }
     else if ((e.keyCode == '89')){
@@ -900,17 +1016,12 @@ function calculateTriangleArea(pa, pb, pc){
     return area;
 }
 
-function calculateCentroids(geometry){
-    for (var i = 0; i < geometry.faces.length; ++i)
-    {
-        var face = geometry.faces[i];
-        var p0 = geometry.vertices[face.a]
-        var p1 = geometry.vertices[face.b]
-        var p2 = geometry.vertices[face.c]
-        face.centroid = calculateFaceCentroid(p0, p1, p2);
-    }
+function calculateFaceCentroid(pa, pb, pc){       
+    var vabHalf = pb.clone().sub(pa).divideScalar(2);
+    var pabHalf = pa.clone().add(vabHalf);
+    var centroid = pc.clone().sub(pabHalf).multiplyScalar(1/3).add(pabHalf);
+    return centroid;
 }
-
 
 
 
@@ -1068,10 +1179,7 @@ Array.prototype.contains = function(obj) {
     return false;
 }
 
-function calculateFaceCentroid(a, b, c){       
-    var centroid = new THREE.Vector3((a.x+b.x+c.x)/3,(a.y+b.y+c.y)/3,(a.z+b.z+c.z)/3);
-    return centroid;
-}
+
 
 function indexOfVertice(vertices, v){
     for (var i = 0; i< vertices.length;i++){
