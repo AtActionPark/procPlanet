@@ -769,14 +769,14 @@ function checkKey(e) {
     e = e || window.event;
 
 
-    if (e.keyCode == '81') {        
+    if (e.keyCode == '69') {        
         for( var i = scene.children.length - 1; i >= 0; i--) {obj = scene.children[i];scene.remove(obj);}
         
         planet.geometry = generatePlanetGeometry();
         scene.add(generatePlanetMesh())
         addLight();
     }
-    else if ((e.keyCode == '65')){
+    else if ((e.keyCode == '82')){
         for( var i = scene.children.length - 1; i >= 0; i--) {obj = scene.children[i];scene.remove(obj);}
         //rotateEdge(planet.topology,2)
         planet.tiledTopology = generatePlanetTiledTopology(planet.topology); 
@@ -785,11 +785,11 @@ function checkKey(e) {
         scene.add(generatePlanetMesh())
         addLight();
     }
-    else if ((e.keyCode == '87')){
+    else if ((e.keyCode == '84')){
         rotateEdge(planet.topology,89)
 
     }
-    else if ((e.keyCode == '90')){
+    else if ((e.keyCode == '89')){
         if(wireframe == false){
             var material    = new THREE.MeshBasicMaterial({
                 color:0xff0000,
