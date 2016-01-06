@@ -19,9 +19,10 @@ var noise
 window.onload = function(){
     initializeScene();
     noise.seed(Math.random());
-    planet = generatePlanet(20,0.5);
+    planet = generatePlanet(10,0.8);
     planet.material = [new THREE.MeshLambertMaterial({ color: new THREE.Color(0x000000), ambient: new THREE.Color(0xFFFFFF), vertexColors: THREE.VertexColors, })];
     drawPlanet(planet)
+    drawEdges(planet)
     renderScene(); 
     console.log(planet)     
 }
@@ -153,7 +154,25 @@ function drawPlanet(planet){
     //create mesh
     planet.mesh = generatePlanetMesh(planet);
     scene.add(planet.mesh)
+}
 
+function drawEdges(planet){
+    var material = new THREE.LineBasicMaterial({
+        color: 0x0000ff
+    });
+    var geometry = new THREE.Geometry();
+    var line = new THREE.Line(geometry, material);
+
+    planet.tiledTopology.borders.forEach(function(b){
+        var a = b.corners[0].position;
+        var b = b.corners[1].position;
+        geometry.vertices.push(a);
+        geometry.vertices.push(b); 
+        var line = new THREE.Line(geometry, material);
+        scene.add(line);
+        geometry = new THREE.Geometry();
+    })
+    
 }
 
 //TOPOLOGY
