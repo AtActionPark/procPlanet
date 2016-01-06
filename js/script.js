@@ -8,7 +8,6 @@ var light;
 // array of functions for the rendering loop
 var onRenderFcts = [];
 var Vector3 = THREE.Vector3
-var orderLevel = 10
 
 var planet = {};
 var planetMesh;
@@ -20,7 +19,7 @@ var noise
 window.onload = function(){
     initializeScene();
     noise.seed(Math.random());
-    planet = generatePlanet(100);
+    planet = generatePlanet(20,0.5);
     planet.material = [new THREE.MeshLambertMaterial({ color: new THREE.Color(0x000000), ambient: new THREE.Color(0xFFFFFF), vertexColors: THREE.VertexColors, })];
     drawPlanet(planet)
     renderScene(); 
@@ -91,15 +90,42 @@ function renderScene(){
 }
 
 
-function generatePlanet(topologyDistortionRate){
+function generatePlanet(orderLevel,topologyDistortionRate){
     var planet = {};
     //generate subdivided icosahedron
     planet.topology = generateSubdividedIcosahedron(orderLevel);
 
+
     // distort mesh
-    for(var i = 0;i<topologyDistortionRate;i++){
-        distortMesh(planet.topology, 1);
-        relaxMesh(planet.topology, 0.5)
+    var totalDistortion = Math.ceil(planet.topology.edges.length * topologyDistortionRate);
+    var remainingIterations = 6;
+    while(remainingIterations>0){
+        var iterationDistortion = Math.floor(totalDistortion / remainingIterations);
+        totalDistortion -= iterationDistortion;
+        distortMesh(planet.topology, iterationDistortion);
+        relaxMesh(planet.topology, 0.5);
+        --remainingIterations;
+    }
+    var intervalIteration = 0
+
+    var initialIntervalIteration = intervalIteration;
+    
+    var averageNodeRadius = Math.sqrt(4 * Math.PI / planet.topology.nodes.length);
+    var minShiftDelta = averageNodeRadius / 50000 * planet.topology.nodes.length;
+    var maxShiftDelta = averageNodeRadius / 50 * planet.topology.nodes.length;
+    var priorShift;
+    var currentShift = relaxMesh(planet.topology, 0.5);
+    var x = 4;
+    while(x>0){
+        priorShift = currentShift;
+        currentShift = relaxMesh(planet.topology, 0.5);
+        var shiftDelta = Math.abs(currentShift - priorShift);
+        if (shiftDelta >= minShiftDelta && intervalIteration - initialIntervalIteration < 300)
+        {   
+            x+=(maxShiftDelta - shiftDelta) / (maxShiftDelta - minShiftDelta)
+        }
+        x--
+        console.log("relaxed")
     }
     
     // calculate centroids 
