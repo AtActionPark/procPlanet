@@ -13,16 +13,16 @@ var planet = {};
 var planetMesh;
 var wireframe = false;
 var mode = "tile"
+var renderMode = "elevation"
 var noise
 
 
 window.onload = function(){
     initializeScene();
-    noise.seed(Math.random());
-    planet = generatePlanet(10,0.8);
-    planet.material = [new THREE.MeshLambertMaterial({ color: new THREE.Color(0x000000), ambient: new THREE.Color(0xFFFFFF), vertexColors: THREE.VertexColors, })];
+
+    planet = generatePlanet(30,0.5);
     drawPlanet(planet)
-    drawEdges(planet)
+    //drawEdges(planet)
     renderScene(); 
     console.log(planet)     
 }
@@ -34,7 +34,7 @@ function initializeScene(){
     });
     renderer.setClearColor(new THREE.Color('lightgrey'), 1)
     renderer.setFaceCulling(THREE.CullFaceFront, THREE.FrontFaceDirectionCW);
-    
+    renderer.sortObjects = false;
 
     renderer.setSize( window.innerWidth, window.innerHeight );
     document.body.appendChild( renderer.domElement );
@@ -46,8 +46,8 @@ function initializeScene(){
     // init scene and camera
     scene = new THREE.Scene();
     
-    camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01, 1000);
-    camera.position.z = 5;
+    camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01,50000);
+    camera.position.z =3000;
 
     controls = new THREE.OrbitControls(camera);
     addLight();
@@ -93,6 +93,7 @@ function renderScene(){
 
 function generatePlanet(orderLevel,topologyDistortionRate){
     var planet = {};
+    planet.material = [new THREE.MeshLambertMaterial({ color: new THREE.Color(0x000000), ambient: new THREE.Color(0xFFFFFF), vertexColors: THREE.VertexColors, })];
     //generate subdivided icosahedron
     planet.topology = generateSubdividedIcosahedron(orderLevel);
 
@@ -141,7 +142,7 @@ function generatePlanet(orderLevel,topologyDistortionRate){
 
     //
     setElevation(planet);
-    setColors()
+    setColors(planet)
 
     //compute dual poly geometry
     planet.geometry = generatePlanetTiledGeometry(planet);
@@ -171,8 +172,7 @@ function drawEdges(planet){
         var line = new THREE.Line(geometry, material);
         scene.add(line);
         geometry = new THREE.Geometry();
-    })
-    
+    })  
 }
 
 //TOPOLOGY
@@ -672,7 +672,7 @@ function generatePlanetTiledTopology(topology){
 
     for (var i = 0; i < topology.faces.length; ++i){
         var face = topology.faces[i];
-        corners[i] = new Corner(i, face.centroid.clone().multiplyScalar(1), face.e.length, face.e.length, face.n.length);
+        corners[i] = new Corner(i, face.centroid.clone().multiplyScalar(1000), face.e.length, face.e.length, face.n.length);
     }
 
     for (var i = 0; i < topology.edges.length; ++i){
@@ -682,7 +682,7 @@ function generatePlanetTiledTopology(topology){
 
     for (var i = 0; i < topology.nodes.length; ++i){
         var node = topology.nodes[i];
-        tiles[i] = new Tile(i, node.p.clone().multiplyScalar(1), node.f.length, node.e.length, node.e.length);
+        tiles[i] = new Tile(i, node.p.clone().multiplyScalar(1000), node.f.length, node.e.length, node.e.length);
     }
 
     for (var i = 0; i < corners.length; ++i){
@@ -849,6 +849,7 @@ function generatePlanetTiledGeometry(planet){
     }
 
     planet.geometry = geometry;
+
     return geometry;
 }
 
@@ -856,7 +857,6 @@ function generatePlanetTiledGeometry(planet){
 //MESH
 function generatePlanetMesh(planet){
     planet.mesh = new THREE.SceneUtils.createMultiMaterialObject(planet.geometry ,planet.material);
-
     return planet.mesh;
 }
 
@@ -868,31 +868,589 @@ function modifyTileColor(i, color){
     planet.tiledTopology.tiles[i].color = color
 }
 
-function setColors(){
-    var colorDeviance = new THREE.Color(0.2,0.2,0.2);
-    
+function setColors(planet){
+    var colorDeviance = new THREE.Color(Math.random(), Math.random(), Math.random());
 
     for(var i = 0; i < planet.tiledTopology.tiles.length;i++){
         var tile = planet.tiledTopology.tiles[i]
-        modifyTileColor(i, new THREE.Color(0x0066FF).lerp(new THREE.Color(0x0044BB), Math.min(-tile.elevation, 1)).lerp(colorDeviance, 0.10))
-        //modifyTileColor(i, new THREE.Color('#'+Math.floor(Math.random()*16777215).toString(16)))
+        if(renderMode == "biome"){
+            if(tile.elevation<0)
+            modifyTileColor(i, new THREE.Color(0x0066FF).lerp(new THREE.Color(0x0044BB), Math.min(-tile.elevation, 1)).lerp(colorDeviance, 0.10))
+        else
+            modifyTileColor(i, new THREE.Color(0xAA9977).lerp(new THREE.Color(0x887755), tile.elevation).lerp(colorDeviance, 0.10))
+        }
+        
+        else if (renderMode == "elevation"){
+            if (tile.elevation <= 0)
+            modifyTileColor(i, new THREE.Color(0x224488).lerp(new THREE.Color(0xAADDFF), Math.max(0, Math.min((tile.elevation + 3/4) / (3/4), 1))))
+
+        else if (tile.elevation < 0.75)
+            modifyTileColor(i, new THREE.Color(0x997755).lerp(new THREE.Color(0x553311), Math.max(0, Math.min((tile.elevation) / (3/4), 1))))
+
+        else
+            modifyTileColor(i,  new THREE.Color(0x553311).lerp(new THREE.Color(0x222222), Math.max(0, Math.min((tile.elevation - 3/4) / (1/2), 1))))
+        }
+        else if (renderMode == "plates"){
+            modifyTileColor(i, tile.plate.color)
+        }
+
     }
 }
 
 function setElevation(planet){
-    for(var i = 0; i < planet.tiledTopology.tiles.length;i++){
-        x = planet.tiledTopology.tiles[i].position.x;
-        y = planet.tiledTopology.tiles[i].position.y;
-        z = planet.tiledTopology.tiles[i].position.z;
-        planet.tiledTopology.tiles[i].elevation = -noise.simplex3(x , y , z);
+    tiles = planet.tiledTopology.tiles;
+    generatePlanetTerrain(planet)
 
-    }
+    //for(var i = 0; i < planet.tiledTopology.tiles.length;i++){
+    //    x = planet.tiledTopology.tiles[i].position.x;
+    //   y = planet.tiledTopology.tiles[i].position.y;
+    //    z = planet.tiledTopology.tiles[i].position.z;
+    //    planet.tiledTopology.tiles[i].elevation = noise.simplex3(x , y , z)-0.3;
+    //}
+}
+
+function generatePlanetTerrain(planet){
+
+    var elevationBorderQueueSorter = function(left, right) { return left.distanceToPlateBoundary - right.distanceToPlateBoundary; };
+    tiles = planet.tiledTopology.tiles;
+
+    var plates = generateTectonicPlates(planet,planet.tiledTopology,50,0.7)
+    identifyBoundaryBorders(planet.tiledTopology.borders)
+    var corners = collectBoundaryCorners(planet.tiledTopology.corners)
+    var indexes = calculatePlateBoundaryStress(corners)
+
+    blurPlateBoundaryStress(corners,3,0.4)
+
+    var elevationQueue = populateElevationBorderQueue(corners, indexes)
+    console.log(elevationQueue[0])
+    processElevationBorderQueue(elevationQueue, elevationBorderQueueSorter);
+
+
+    calculateTileAverageElevations(planet.tiledTopology.tiles);
+    for(var i = 0;i<15;i++)
+        extrude(planet)
+
+    drawBoundaryBorders(plates)
 }
 
 
 
+function generateTectonicPlates(planet,topology, plateCount, oceanicRate){
+    var plates = [];
+    var platelessTiles = [];
+    var platelessTilePlates = [];
 
+    var failedCount = 0;
+    while (plates.length < plateCount && failedCount < 10000){
+        var corner = topology.corners[Math.floor(Math.random()*topology.corners.length)]
+        var adjacentToExistingPlate = false;
+        for (var i = 0; i < corner.tiles.length; ++i)
+        {
+            if (corner.tiles[i].plate )
+            {
+                adjacentToExistingPlate = true;
+                failedCount += 1;
+                break;
+            }
+        }
+        if (adjacentToExistingPlate) continue;
+        
+        failedCount = 0;
+        
+        var oceanic = (Math.random() < oceanicRate);
+        var plate = new Plate(Math.floor(Math.random()*10), new THREE.Color("#"+((1<<24)*Math.random()|0).toString(16)))
+        var plate = new Plate(
+                new THREE.Color("#"+((1<<24)*Math.random()|0).toString(16)),
+                new randomUnitVector(Math.random()),
+                randomFromInterval(-Math.PI / 30, Math.PI / 30),
+                randomFromInterval(-Math.PI / 30, Math.PI / 30),
+                oceanic ? -randomFromInterval(0.8, 0.3) : randomFromInterval(0.1, 0.5),
+                oceanic,
+                corner);
+            
+        plates.push(plate);
 
+        for (var i = 0; i < corner.tiles.length; ++i)
+        {
+            corner.tiles[i].plate = plate;
+            plate.tiles.push(corner.tiles[i]);
+        }
+
+        for (var i = 0; i < corner.tiles.length; ++i)
+        {
+            var corner = corner.tiles[i];
+            for (var j = 0; j < corner.tiles.length; ++j)
+            {
+                var adjacentTile = corner.tiles[j];
+                if (!adjacentTile.plate)
+                {
+                    platelessTiles.push(adjacentTile);
+                    platelessTilePlates.push(plate);
+                }
+            }
+        }
+    }
+    while (platelessTiles.length > 0){
+        var tileIndex = Math.floor(Math.pow(Math.random(), 2) * platelessTiles.length);
+        var tile = platelessTiles[tileIndex];
+        var plate = platelessTilePlates[tileIndex];
+        platelessTiles.splice(tileIndex, 1);
+        platelessTilePlates.splice(tileIndex, 1);
+        if (!tile.plate)
+        {
+            tile.plate = plate;
+            plate.tiles.push(tile);
+            for (var j = 0; j < tile.tiles.length; ++j)
+            {
+                if (!tile.tiles[j].plate)
+                {
+                    platelessTiles.push(tile.tiles[j]);
+                    platelessTilePlates.push(plate);
+                }
+            }
+        }
+    }
+    
+    console.log(plates)
+    calculateCornerDistancesToPlateRoot(plates)
+    planet.plates = plates
+    return plates
+}
+
+function calculateCornerDistancesToPlateRoot(plates){
+    var distanceCornerQueue = [];
+    for (var i = 0; i < plates.length; ++i)
+    {
+        var corner = plates[i].root;
+        corner.distanceToPlateRoot = 0;
+        for (var j = 0; j < corner.corners.length; ++j)
+        {
+            distanceCornerQueue.push({ corner: corner.corners[j], distanceToPlateRoot: corner.borders[j].length() });
+        }
+    }
+    
+    var distanceCornerQueueSorter = function(left, right) { return left.distanceToPlateRoot - right.distanceToPlateRoot; };
+
+    while(true){
+        if (distanceCornerQueue.length === 0) return;
+
+        var iEnd = iEnd = distanceCornerQueue.length;
+        for (var i = 0; i < iEnd; ++i)
+        {
+            var front = distanceCornerQueue[i];
+            var corner = front.corner;
+            var distanceToPlateRoot = front.distanceToPlateRoot;
+            if (!corner.distanceToPlateRoot || corner.distanceToPlateRoot > distanceToPlateRoot)
+            {
+                corner.distanceToPlateRoot = distanceToPlateRoot;
+                for (var j = 0; j < corner.corners.length; ++j)
+                {
+                    distanceCornerQueue.push({ corner: corner.corners[j], distanceToPlateRoot: distanceToPlateRoot + corner.borders[j].length() });
+                }
+            }
+        }
+        distanceCornerQueue.splice(0, iEnd);
+        distanceCornerQueue.sort(distanceCornerQueueSorter);  
+    };
+}
+
+function identifyBoundaryBorders(borders){
+    for (var i = 0; i < borders.length; ++i)
+    {
+        var border = borders[i];
+        if (border.tiles[0].plate !== border.tiles[1].plate)
+        {
+            border.betweenPlates = true;
+            border.corners[0].betweenPlates = true;
+            border.corners[1].betweenPlates = true;
+            border.tiles[0].plate.boundaryBorders.push(border);
+            border.tiles[1].plate.boundaryBorders.push(border);
+        }
+    }
+}
+
+function drawBoundaryBorders(plates){
+    for (var i =0;i<plates.length;i++){
+        var colorDeviance = new THREE.Color(0.2,0.2,0.2);
+        var material = new THREE.LineBasicMaterial({});
+        var geometry = new THREE.Geometry();
+        var line = new THREE.Line(geometry, material);
+
+        plates[i].boundaryBorders.forEach(function(x){
+            var normal = x.midpoint.clone().normalize();
+            var offset = normal.clone().multiplyScalar(1);
+
+            var a = x.corners[0].position;
+            var b = x.corners[1].position;
+
+            var p = x.corners[0].pressure;
+            geometry.vertices.push(a.clone().add(offset));
+            geometry.vertices.push(b.clone().add(offset)); 
+
+            var pressure = Math.max(-1, Math.min((x.corners[0].pressure + x.corners[1].pressure) / 2, 1));
+            material.color =  (pressure <= 0) ? new THREE.Color(1 + pressure, 1, 0) : new THREE.Color(1, 1 - pressure, 0);
+            var line = new THREE.Line(geometry, material);
+            scene.add(line);
+            geometry = new THREE.Geometry();
+        })  
+    }
+}
+
+function collectBoundaryCorners(corners){
+    var boundaryCorners = [];
+    for (var j = 0; j < corners.length; ++j)
+    {
+        var corner = corners[j];
+        if (corner.betweenPlates)
+        {
+            boundaryCorners.push(corner);
+            corner.tiles[0].plate.boundaryCorners.push(corner);
+            if (corner.tiles[1].plate !== corner.tiles[0].plate) corner.tiles[1].plate.boundaryCorners.push(corner);
+            if (corner.tiles[2].plate !== corner.tiles[0].plate && corner.tiles[2].plate !== corner.tiles[1].plate) corner.tiles[2].plate.boundaryCorners.push(corner);
+        }
+    }
+    
+    return boundaryCorners;
+}
+
+function calculatePlateBoundaryStress(boundaryCorners){
+    var boundaryCornerInnerBorderIndexes = new Array(boundaryCorners.length);
+    for (var i = 0; i < boundaryCorners.length; ++i)
+    {
+        var corner = boundaryCorners[i];
+        corner.distanceToPlateBoundary = 0;
+    
+        var innerBorder;
+        var innerBorderIndex;
+        for (var j = 0; j < corner.borders.length; ++j)
+        {
+            var border = corner.borders[j];
+            if (!border.betweenPlates)
+            {
+                innerBorder = border;
+                innerBorderIndex = j;
+                break;
+            }
+        }
+        
+        if (innerBorder)
+        {
+            boundaryCornerInnerBorderIndexes[i] = innerBorderIndex;
+            var outerBorder0 = corner.borders[(innerBorderIndex + 1) % corner.borders.length];
+            var outerBorder1 = corner.borders[(innerBorderIndex + 2) % corner.borders.length]
+            var farCorner0 = outerBorder0.oppositeCorner(corner);
+            var farCorner1 = outerBorder1.oppositeCorner(corner);
+            var plate0 = innerBorder.tiles[0].plate;
+            var plate1 = outerBorder0.tiles[0].plate !== plate0 ? outerBorder0.tiles[0].plate : outerBorder0.tiles[1].plate;
+            var boundaryVector = farCorner0.vectorTo(farCorner1);
+            var boundaryNormal = boundaryVector.clone().cross(corner.position);
+            var stress = calculateStress(plate0.calculateMovement(corner.position), plate1.calculateMovement(corner.position), boundaryVector, boundaryNormal);
+            corner.pressure = stress.pressure;
+            corner.shear = stress.shear;
+        }
+        else
+        {
+            boundaryCornerInnerBorderIndexes[i] = null;
+            var plate0 = corner.tiles[0].plate;
+            var plate1 = corner.tiles[1].plate;
+            var plate2 = corner.tiles[2].plate;
+            var boundaryVector0 = corner.corners[0].vectorTo(corner);
+            var boundaryVector1 = corner.corners[1].vectorTo(corner);
+            var boundaryVector2 = corner.corners[2].vectorTo(corner);
+            var boundaryNormal0 = boundaryVector0.clone().cross(corner.position);
+            var boundaryNormal1 = boundaryVector1.clone().cross(corner.position);
+            var boundaryNormal2 = boundaryVector2.clone().cross(corner.position);
+            var stress0 = calculateStress(plate0.calculateMovement(corner.position), plate1.calculateMovement(corner.position), boundaryVector0, boundaryNormal0);
+            var stress1 = calculateStress(plate1.calculateMovement(corner.position), plate2.calculateMovement(corner.position), boundaryVector1, boundaryNormal1);
+            var stress2 = calculateStress(plate2.calculateMovement(corner.position), plate0.calculateMovement(corner.position), boundaryVector2, boundaryNormal2);
+            
+            corner.pressure = (stress0.pressure + stress1.pressure + stress2.pressure) / 3;
+            corner.shear = (stress0.shear + stress1.shear + stress2.shear) / 3;
+        }
+    }
+    
+    return boundaryCornerInnerBorderIndexes;
+}
+
+function calculateStress(movement0, movement1, boundaryVector, boundaryNormal){
+    var relativeMovement = movement0.clone().sub(movement1);
+    var pressureVector = relativeMovement.clone().projectOnVector(boundaryNormal);
+    var pressure = pressureVector.length();
+    if (pressureVector.dot(boundaryNormal) > 0) pressure = -pressure;
+    var shear = relativeMovement.clone().projectOnVector(boundaryVector).length();
+    return { pressure: 2 / (1 + Math.exp(-pressure / 30)) - 1, shear: 2 / (1 + Math.exp(-shear / 30)) - 1 };
+}
+
+function blurPlateBoundaryStress(boundaryCorners, stressBlurIterations, stressBlurCenterWeighting, action){
+    var newCornerPressure = new Array(boundaryCorners.length);
+    var newCornerShear = new Array(boundaryCorners.length);
+    for (var i = 0; i < stressBlurIterations; ++i)
+    {
+        for (var j = 0; j < boundaryCorners.length; ++j)
+        {
+            var corner = boundaryCorners[j];
+            var averagePressure = 0;
+            var averageShear = 0;
+            var neighborCount = 0;
+            for (var k = 0; k < corner.corners.length; ++k)
+            {
+                var neighbor = corner.corners[k];
+                if (neighbor.betweenPlates)
+                {
+                    averagePressure += neighbor.pressure;
+                    averageShear += neighbor.shear;
+                    ++neighborCount;
+                }
+            }
+            newCornerPressure[j] = corner.pressure * stressBlurCenterWeighting + (averagePressure / neighborCount) * (1 - stressBlurCenterWeighting);
+            newCornerShear[j] = corner.shear * stressBlurCenterWeighting + (averageShear / neighborCount) * (1 - stressBlurCenterWeighting);
+        }
+        
+        for (var j = 0; j < boundaryCorners.length; ++j)
+        {
+            var corner = boundaryCorners[j];
+            if (corner.betweenPlates)
+            {
+                corner.pressure = newCornerPressure[j];
+                corner.shear = newCornerShear[j];
+            }
+        }
+    }
+}
+
+function populateElevationBorderQueue(boundaryCorners, boundaryCornerInnerBorderIndexes){
+    var elevationBorderQueue = [];
+    for (var i = 0; i < boundaryCorners.length; ++i)
+    {
+        var corner = boundaryCorners[i];
+        
+        var innerBorderIndex = boundaryCornerInnerBorderIndexes[i];
+        if (innerBorderIndex !== null)
+        {
+            var innerBorder = corner.borders[innerBorderIndex];
+            var outerBorder0 = corner.borders[(innerBorderIndex + 1) % corner.borders.length];
+            var plate0 = innerBorder.tiles[0].plate;
+            var plate1 = outerBorder0.tiles[0].plate !== plate0 ? outerBorder0.tiles[0].plate : outerBorder0.tiles[1].plate;
+            
+            var calculateElevation;
+            
+            if (corner.pressure > 0.3)
+            {
+                corner.elevation = Math.max(plate0.elevation, plate1.elevation) + corner.pressure;
+                if (plate0.oceanic === plate1.oceanic)
+                    calculateElevation = calculateCollidingElevation;
+                else if (plate0.oceanic)
+                    calculateElevation = calculateSubductingElevation;
+                else
+                    calculateElevation = calculateSuperductingElevation;
+            }
+            else if (corner.pressure < -0.3)
+            {
+                corner.elevation = Math.max(plate0.elevation, plate1.elevation) - corner.pressure / 4;
+                calculateElevation = calculateDivergingElevation;
+            }
+            else if (corner.shear > 0.3)
+            {
+                corner.elevation = Math.max(plate0.elevation, plate1.elevation) + corner.shear / 8;
+                calculateElevation = calculateShearingElevation;
+            }
+            else
+            {
+                corner.elevation = (plate0.elevation + plate1.elevation) / 2;
+                calculateElevation = calculateDormantElevation;
+            }
+            
+            var nextCorner = innerBorder.oppositeCorner(corner);
+            if (!nextCorner.betweenPlates)
+            {
+                elevationBorderQueue.push({
+                    origin: {
+                        corner: corner,
+                        pressure: corner.pressure,
+                        shear: corner.shear,
+                        plate: plate0,
+                        calculateElevation: calculateElevation },
+                    border: innerBorder,
+                    corner: corner,
+                    nextCorner: nextCorner,
+                    distanceToPlateBoundary: innerBorder.length(),
+                });
+            }
+        }
+        else
+        {
+            var plate0 = corner.tiles[0].plate;
+            var plate1 = corner.tiles[1].plate;
+            var plate2 = corner.tiles[2].plate;
+            
+            elevation = 0;
+
+            if (corner.pressure > 0.3)
+            {
+                corner.elevation = Math.max(plate0.elevation, plate1.elevation, plate2.elevation) + corner.pressure;
+            }
+            else if (corner.pressure < -0.3)
+            {
+                corner.elevation = Math.max(plate0.elevation, plate1.elevation, plate2.elevation) + corner.pressure / 4;
+            }
+            else if (corner.shear > 0.3)
+            {
+                corner.elevation = Math.max(plate0.elevation, plate1.elevation, plate2.elevation) + corner.shear / 8;
+            }
+            else
+            {
+                corner.elevation = (plate0.elevation + plate1.elevation + plate2.elevation) / 3;
+            }
+        }
+    }
+    
+    return elevationBorderQueue;
+}
+
+function calculateCollidingElevation(distanceToPlateBoundary, distanceToPlateRoot, boundaryElevation, plateElevation, pressure, shear){
+    var t = distanceToPlateBoundary / (distanceToPlateBoundary + distanceToPlateRoot);
+    if (t < 0.5)
+    {
+        t = t / 0.5;
+        return plateElevation + Math.pow(t - 1, 2) * (boundaryElevation - plateElevation);
+    }
+    else
+    {
+        return plateElevation;
+    }
+}
+
+function calculateSuperductingElevation(distanceToPlateBoundary, distanceToPlateRoot, boundaryElevation, plateElevation, pressure, shear){
+    var t = distanceToPlateBoundary / (distanceToPlateBoundary + distanceToPlateRoot);
+    if (t < 0.2)
+    {
+        t = t / 0.2;
+        return boundaryElevation + t * (plateElevation - boundaryElevation + pressure / 2);
+    }
+    else if (t < 0.5)
+    {
+        t = (t - 0.2) / 0.3;
+        return plateElevation + Math.pow(t - 1, 2) * pressure / 2;
+    }
+    else
+    {
+        return plateElevation;
+    }
+}
+
+function calculateSubductingElevation(distanceToPlateBoundary, distanceToPlateRoot, boundaryElevation, plateElevation, pressure, shear){
+    var t = distanceToPlateBoundary / (distanceToPlateBoundary + distanceToPlateRoot);
+    return plateElevation + Math.pow(t - 1, 2) * (boundaryElevation - plateElevation);
+}
+
+function calculateDivergingElevation(distanceToPlateBoundary, distanceToPlateRoot, boundaryElevation, plateElevation, pressure, shear){
+    var t = distanceToPlateBoundary / (distanceToPlateBoundary + distanceToPlateRoot);
+    if (t < 0.3)
+    {
+        t = t / 0.3;
+        return plateElevation + Math.pow(t - 1, 2) * (boundaryElevation - plateElevation);
+    }
+    else
+    {
+        return plateElevation;
+    }
+}
+
+function calculateShearingElevation(distanceToPlateBoundary, distanceToPlateRoot, boundaryElevation, plateElevation, pressure, shear){
+    var t = distanceToPlateBoundary / (distanceToPlateBoundary + distanceToPlateRoot);
+    if (t < 0.2)
+    {
+        t = t / 0.2;
+        return plateElevation + Math.pow(t - 1, 2) * (boundaryElevation - plateElevation);
+    }
+    else
+    {
+        return plateElevation;
+    }
+}
+
+function calculateDormantElevation(distanceToPlateBoundary, distanceToPlateRoot, boundaryElevation, plateElevation, pressure, shear){
+    var t = distanceToPlateBoundary / (distanceToPlateBoundary + distanceToPlateRoot);
+    var elevationDifference = boundaryElevation - plateElevation;
+    var a = 2 * elevationDifference;
+    var b = -3 * elevationDifference;
+    return t * t * elevationDifference * (2 * t - 3) + boundaryElevation;
+}
+
+function processElevationBorderQueue(elevationBorderQueue, elevationBorderQueueSorter){
+    while(true){
+        if (elevationBorderQueue.length === 0) return;
+
+        var iEnd = iEnd = elevationBorderQueue.length;
+        for (var i = 0; i < iEnd; ++i)
+        {
+            var front = elevationBorderQueue[i];
+            var corner = front.nextCorner;
+            if (!corner.elevation)
+            {
+                corner.distanceToPlateBoundary = front.distanceToPlateBoundary;
+                
+                corner.elevation = front.origin.calculateElevation(
+                    corner.distanceToPlateBoundary,
+                    corner.distanceToPlateRoot,
+                    front.origin.corner.elevation,
+                    front.origin.plate.elevation,
+                    front.origin.pressure,
+                    front.origin.shear);
+ 
+                for (var j = 0; j < corner.borders.length; ++j)
+                {
+                    var border = corner.borders[j];
+                    if (!border.betweenPlates)
+                    {
+                        var nextCorner = corner.corners[j];
+                        var distanceToPlateBoundary = corner.distanceToPlateBoundary + border.length();
+                        if (!nextCorner.distanceToPlateBoundary || nextCorner.distanceToPlateBoundary > distanceToPlateBoundary)
+                        {
+                            elevationBorderQueue.push({
+                                origin: front.origin,
+                                border: border,
+                                corner: corner,
+                                nextCorner: nextCorner,
+                                distanceToPlateBoundary: distanceToPlateBoundary,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        elevationBorderQueue.splice(0, iEnd);
+        elevationBorderQueue.sort(elevationBorderQueueSorter);
+    }
+}
+
+function calculateTileAverageElevations(tiles){
+    for (var i = 0; i < tiles.length; ++i)
+    {
+        var tile = tiles[i];
+        var elevation = 0;
+        for (var j = 0; j < tile.corners.length; ++j)
+        {
+            elevation += tile.corners[j].elevation;
+        }
+        tile.elevation = elevation / tile.corners.length;
+    }
+}
+
+function extrude(planet){
+    planet.tiledTopology.corners.forEach(function(c){
+        var normal = c.position.clone().normalize();
+        var offset = normal.clone().multiplyScalar(Math.max(c.elevation,0));
+        c.position.add(offset)
+
+    })
+    planet.tiledTopology.tiles.forEach(function(t){
+        var normal = t.averagePosition.clone().normalize();
+        var offset = normal.clone().multiplyScalar(Math.max(t.elevation,0));
+        t.averagePosition.add(offset);
+        
+    })
+}
 
 
 
@@ -902,70 +1460,54 @@ function checkKey(e) {
 
     e = e || window.event;
 
+    // E
     if (e.keyCode == '69') {
-        mode = "triangle"
+        renderMode = "elevation"
         emptyScene()
-        planet.geometry = generatePlanetGeometry(planet);
-        planet.material = getMaterial(planet);
-        drawPlanet(planet);
-        addLight();
-        
-    }
-    else if ((e.keyCode == '82')){
-        mode = "tile"
-        emptyScene()
-        planet.tiledTopology = generatePlanetTiledTopology(planet.topology); 
-        setElevation(planet)
-        setColors()
+        setColors(planet)
         planet.geometry = generatePlanetTiledGeometry(planet);
-        planet.material = getMaterial(planet);
         drawPlanet(planet);
+        
         addLight();
         
-
     }
+    //R
+    else if ((e.keyCode == '82')){
+        renderMode = "biome"
+        emptyScene()
+        setColors(planet)
+        planet.geometry = generatePlanetTiledGeometry(planet);
+        drawPlanet(planet);
+        addLight();
+    }
+
+    //T
     else if ((e.keyCode == '84')){
+        renderMode = "plates"
         emptyScene()
-        distortMesh(planet.topology,1);
-        centroids(planet.topology)
-        reorderTriangleNodes(planet.topology)
-        if (mode == "triangle"){
-            planet.geometry = generatePlanetGeometry(planet);
-        }
-        else if (mode == "tile"){
-            planet.tiledTopology = generatePlanetTiledTopology(planet.topology);
-            setElevation(planet)
-            setColors()
-            planet.geometry = generatePlanetTiledGeometry(planet);
-        }
+        setColors(planet)
+        planet.geometry = generatePlanetTiledGeometry(planet);
         drawPlanet(planet);
         addLight();
     }
+    //G
     else if ((e.keyCode == '71')){
-        emptyScene()
-        relaxMesh(planet.topology,1);
-        centroids(planet.topology)
-        reorderTriangleNodes(planet.topology)
-        if (mode == "triangle"){
-            planet.geometry = generatePlanetGeometry(planet);
-        }
-        else if (mode == "tile"){
-            planet.tiledTopology = generatePlanetTiledTopology(planet.topology);
-            setElevation(planet)
-            setColors()
-            planet.geometry = generatePlanetTiledGeometry(planet);
-        }
+drawBoundaryBorders(planet.plates)
+    }
+    //Y
+    else if ((e.keyCode == '89')){
+
         
+
+        emptyScene()
+        extrude(planet)
+        setColors(planet)
+        planet.geometry = generatePlanetTiledGeometry(planet);
         drawPlanet(planet);
         addLight();
+        //drawBoundaryBorders(planet.plates)
+        
 
-    }
-    else if ((e.keyCode == '89')){
-        wireframe ? wireframe = false: wireframe = true
-        planet.material = getMaterial(planet)
-        emptyScene();
-        drawPlanet(planet); 
-        addLight();  
     }
         
 }
@@ -1075,6 +1617,22 @@ function buildTileWedge(f, b, s, t, n){
     f.push(new THREE.Face3(b + s + 1, b + t + 2, b + s + 2, n));
 }
 
+function randomFromInterval(min,max)
+{
+    return Math.random()*(max-min+1)+min;
+}
+
+function randomUnitVector(random)
+{
+    var theta = Math.floor(randomFromInterval(0, Math.PI * 2));
+    var phi = Math.acos(Math.floor(randomFromInterval(-1, 1)));
+    var sinPhi = Math.sin(phi);
+    return new Vector3(
+        Math.cos(theta) * sinPhi,
+        Math.sin(theta) * sinPhi,
+        Math.cos(phi));
+}
+
 
 
 //STRUCT
@@ -1127,7 +1685,30 @@ function Tile(id, position, cornerCount, borderCount, tileCount){
     this.corners = new Array(cornerCount);
     this.borders = new Array(borderCount);
     this.tiles = new Array(tileCount);
+
+
 }
+
+function Plate(color, driftAxis, driftRate, spinRate, elevation, oceanic, root)
+{
+    this.color = color;
+    this.driftAxis = driftAxis;
+    this.driftRate = driftRate;
+    this.spinRate = spinRate;
+    this.elevation = elevation;
+    this.oceanic = oceanic;
+    this.root = root;
+    this.tiles = [];
+    this.boundaryCorners = [];
+    this.boundaryBorders = [];
+}
+
+Plate.prototype.calculateMovement = function Plate_calculateMovement(position)
+{
+    var movement = this.driftAxis.clone().cross(position).setLength(this.driftRate * position.clone().projectOnVector(this.driftAxis).distanceTo(position));
+    movement.add(this.root.position.clone().cross(position).setLength(this.spinRate * position.clone().projectOnVector(this.root.position).distanceTo(position)));
+    return movement.multiplyScalar(1);
+};
 
 
 //
@@ -1141,186 +1722,6 @@ function emptyScene(planet){
 
 
 
-
-
-
-
-
-
-
-//FIRST TEST
-function generateIcoGeometry(){
-    var phi = (1.0 + Math.sqrt(5.0)) / 2.0;
-
-    var geometry = new THREE.Geometry();
-
-    geometry.vertices.push(new THREE.Vector3( -1,  phi, 0 ).normalize());
-    geometry.vertices.push(new THREE.Vector3( 1,  phi, 0 ).normalize());
-    geometry.vertices.push(new THREE.Vector3( -1,  -phi, 0 ).normalize());
-    geometry.vertices.push(new THREE.Vector3( 1,  -phi, 0 ).normalize());
-
-    geometry.vertices.push(new THREE.Vector3( 0,  -1, phi ).normalize());
-    geometry.vertices.push(new THREE.Vector3( 0,  1, phi ).normalize());
-    geometry.vertices.push(new THREE.Vector3( 0,  -1, -phi ).normalize());
-    geometry.vertices.push(new THREE.Vector3( 0,  1, -phi ).normalize());
-
-    geometry.vertices.push(new THREE.Vector3( phi,  0, -1 ).normalize());
-    geometry.vertices.push(new THREE.Vector3( phi,  0, 1 ).normalize());
-    geometry.vertices.push(new THREE.Vector3( -phi,  0, -1 ).normalize());
-    geometry.vertices.push(new THREE.Vector3( -phi,  0, 1 ).normalize());
-
-
-    
-    geometry.faces.push(new THREE.Face3( 0,  11, 5 ));
-    geometry.faces.push(new THREE.Face3( 0,  5, 1 ));
-    geometry.faces.push(new THREE.Face3( 0,  1, 7 ));
-    geometry.faces.push(new THREE.Face3( 0,  7, 10 ));
-    geometry.faces.push(new THREE.Face3( 0,  10, 11 ));
-
-    geometry.faces.push(new THREE.Face3(1, 5, 9));
-    geometry.faces.push(new THREE.Face3(5, 11, 4));
-    geometry.faces.push(new THREE.Face3(11, 10, 2));
-    geometry.faces.push(new THREE.Face3(10, 7, 6));
-    geometry.faces.push(new THREE.Face3(7, 1, 8));
-
-    geometry.faces.push(new THREE.Face3(3, 9, 4));
-    geometry.faces.push(new THREE.Face3(3, 4, 2));
-    geometry.faces.push(new THREE.Face3(3, 2, 6));
-    geometry.faces.push(new THREE.Face3(3, 6, 8));
-    geometry.faces.push(new THREE.Face3(3, 8, 9));
-
-    geometry.faces.push(new THREE.Face3(4, 9, 5));
-    geometry.faces.push(new THREE.Face3(2, 4, 11));
-    geometry.faces.push(new THREE.Face3(6, 2, 10));
-    geometry.faces.push(new THREE.Face3(8, 6, 7));
-    geometry.faces.push(new THREE.Face3(9, 8, 1));
-
-    geometry.computeBoundingSphere();
-    geometry.computeVertexNormals();
-    geometry.computeFaceNormals();
-
-    return geometry;
-}
-
-function generateSubdividedIcoGeometry(order){
-    var geometry = generateIcoGeometry();
-
-    for (var i = 0; i < order; i++)
-    {
-        var geometry2 = new THREE.Geometry();
-        geometry2.vertices = geometry.vertices.slice(0);
-        var faces2 = [];
-
-        var faceNb = 0
-        geometry.faces.forEach(function(f){ 
-
-            var a = getMiddlePoint(geometry2,geometry2.vertices[f.a],geometry2.vertices[f.b]);
-            var b = getMiddlePoint(geometry2,geometry2.vertices[f.b],geometry2.vertices[f.c]);
-            var c = getMiddlePoint(geometry2,geometry2.vertices[f.c],geometry2.vertices[f.a]); 
-
-            geometry2.faces.push(new THREE.Face3(indexOfVertice(geometry2.vertices,a), indexOfVertice(geometry2.vertices,b), indexOfVertice(geometry2.vertices,c)));
-            geometry2.faces.push(new THREE.Face3(indexOfVertice(geometry2.vertices,a), indexOfVertice(geometry2.vertices,c), f.a));
-            geometry2.faces.push(new THREE.Face3(indexOfVertice(geometry2.vertices,b), indexOfVertice(geometry2.vertices,a), f.b));
-            geometry2.faces.push(new THREE.Face3(indexOfVertice(geometry2.vertices,c), indexOfVertice(geometry2.vertices,b), f.c));
-        })
-
-        geometry = geometry2
-    }
-
-    geometry.computeBoundingSphere();
-    geometry.computeVertexNormals();
-    geometry.computeFaceNormals();
-
-    //console.log("Geometry : ")
-    //console.log(geometry)
-    return geometry;
-}
-
-function generateTiledGeometry(order){
-    var geometry = generateSubdividedIcoGeometry(order);
-    calculateCentroids(geometry)
-    var geometry2 = new THREE.Geometry();
-
-    for (var i = 0;i<geometry.vertices.length;i++){
-        tryAddVertice(geometry2,geometry.vertices[i])
-    }
-    for (var i = 0;i<geometry.faces.length;i++){
-        tryAddVertice(geometry2,geometry.faces[i].centroid)
-    }
-
-    
-
-    
-
-    //console.log(geometry2)
-}
-
-function generateMesh(order){
-    var geometry    = generateSubdividedIcoGeometry(order);
-    var material    = new THREE.MeshBasicMaterial({
-        color:0xff0000,
-        wireframe: true
-    }); 
-    material = new THREE.MeshNormalMaterial();
-
-    var mesh  = new THREE.Mesh(geometry,material);
-    //console.log("Mesh :" )
-    //console.log(mesh)
-    //console.log("---")
-    return mesh;
-}
-
-function tryAddVertice(g, vertice){
-
-    var test = 0;
-    for (var i = 0; i< g.vertices.length;i++){
-        if (g.vertices[i].x == vertice.x && g.vertices[i].y == vertice.y && g.vertices[i].z == vertice.z)
-            test+=1;
-    }
-    if (test == 0)
-        g.vertices.push(vertice)
-
-    return vertice;
-}
-
-Array.prototype.contains = function(obj) {
-    var i = this.length;
-    while (i--) {
-        if (this[i] === obj) {
-            return true;
-        }
-    }
-    return false;
-}
-
-
-
-function indexOfVertice(vertices, v){
-    for (var i = 0; i< vertices.length;i++){
-        if (vertices[i].x == v.x && vertices[i].y == v.y && vertices[i].z == v.z)
-            return i;
-    }
-    return -1
-}
-
-function getMiddlePoint(g,p1, p2){
-    var middle = new THREE.Vector3(
-        (p1.x + p2.x) / 2.0, 
-        (p1.y + p2.y) / 2.0, 
-        (p1.z + p2.z) / 2.0).normalize();
-
-
-
-    var test = 0;
-    for (var i = 0; i< g.vertices.length;i++){
-        if (g.vertices[i].x == middle.x && g.vertices[i].y == middle.y && g.vertices[i].z == middle.z)
-            test+=1;
-    }
-    if (test == 0)
-        g.vertices.push(middle)
-
-    return middle;
-}
 
 
 

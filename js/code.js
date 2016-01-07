@@ -1785,6 +1785,9 @@ function calculateTileAverageElevations(tiles, action)
 	}
 }
 
+
+
+
 function generatePlanetWeather(topology, partitions, heatLevel, moistureLevel, random, action)
 {
 	var planetRadius = 1000;
