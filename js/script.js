@@ -20,7 +20,7 @@ var noise
 window.onload = function(){
     initializeScene();
 
-    planet = generatePlanet(30,0.5);
+    planet = generatePlanet(20,0.5);
     drawPlanet(planet)
     //drawEdges(planet)
     renderScene(); 
@@ -919,21 +919,22 @@ function generatePlanetTerrain(planet){
     var corners = collectBoundaryCorners(planet.tiledTopology.corners)
     var indexes = calculatePlateBoundaryStress(corners)
 
+
     blurPlateBoundaryStress(corners,3,0.4)
 
     var elevationQueue = populateElevationBorderQueue(corners, indexes)
-    console.log(elevationQueue[0])
     processElevationBorderQueue(elevationQueue, elevationBorderQueueSorter);
 
+    //planet.tiledTopology.corners.forEach(function(c){
+    //    c.elevation-=2;
+    //})
 
     calculateTileAverageElevations(planet.tiledTopology.tiles);
-    for(var i = 0;i<15;i++)
+    for(var i = 0;i<30;i++)
         extrude(planet)
 
-    drawBoundaryBorders(plates)
+    //drawBoundaryBorders(plates)
 }
-
-
 
 function generateTectonicPlates(planet,topology, plateCount, oceanicRate){
     var plates = [];
@@ -944,8 +945,7 @@ function generateTectonicPlates(planet,topology, plateCount, oceanicRate){
     while (plates.length < plateCount && failedCount < 10000){
         var corner = topology.corners[Math.floor(Math.random()*topology.corners.length)]
         var adjacentToExistingPlate = false;
-        for (var i = 0; i < corner.tiles.length; ++i)
-        {
+        for (var i = 0; i < corner.tiles.length; ++i){
             if (corner.tiles[i].plate )
             {
                 adjacentToExistingPlate = true;
@@ -958,7 +958,6 @@ function generateTectonicPlates(planet,topology, plateCount, oceanicRate){
         failedCount = 0;
         
         var oceanic = (Math.random() < oceanicRate);
-        var plate = new Plate(Math.floor(Math.random()*10), new THREE.Color("#"+((1<<24)*Math.random()|0).toString(16)))
         var plate = new Plate(
                 new THREE.Color("#"+((1<<24)*Math.random()|0).toString(16)),
                 new randomUnitVector(Math.random()),
@@ -970,14 +969,12 @@ function generateTectonicPlates(planet,topology, plateCount, oceanicRate){
             
         plates.push(plate);
 
-        for (var i = 0; i < corner.tiles.length; ++i)
-        {
+        for (var i = 0; i < corner.tiles.length; ++i){
             corner.tiles[i].plate = plate;
             plate.tiles.push(corner.tiles[i]);
         }
 
-        for (var i = 0; i < corner.tiles.length; ++i)
-        {
+        for (var i = 0; i < corner.tiles.length; ++i){
             var corner = corner.tiles[i];
             for (var j = 0; j < corner.tiles.length; ++j)
             {
@@ -1122,19 +1119,16 @@ function calculatePlateBoundaryStress(boundaryCorners){
     
         var innerBorder;
         var innerBorderIndex;
-        for (var j = 0; j < corner.borders.length; ++j)
-        {
+        for (var j = 0; j < corner.borders.length; ++j){
             var border = corner.borders[j];
-            if (!border.betweenPlates)
-            {
+            if (!border.betweenPlates){
                 innerBorder = border;
                 innerBorderIndex = j;
                 break;
             }
         }
         
-        if (innerBorder)
-        {
+        if (innerBorder){
             boundaryCornerInnerBorderIndexes[i] = innerBorderIndex;
             var outerBorder0 = corner.borders[(innerBorderIndex + 1) % corner.borders.length];
             var outerBorder1 = corner.borders[(innerBorderIndex + 2) % corner.borders.length]
@@ -1148,8 +1142,7 @@ function calculatePlateBoundaryStress(boundaryCorners){
             corner.pressure = stress.pressure;
             corner.shear = stress.shear;
         }
-        else
-        {
+        else{
             boundaryCornerInnerBorderIndexes[i] = null;
             var plate0 = corner.tiles[0].plate;
             var plate1 = corner.tiles[1].plate;
@@ -1425,12 +1418,11 @@ function processElevationBorderQueue(elevationBorderQueue, elevationBorderQueueS
 }
 
 function calculateTileAverageElevations(tiles){
-    for (var i = 0; i < tiles.length; ++i)
-    {
+
+    for (var i = 0; i < tiles.length; ++i){
         var tile = tiles[i];
         var elevation = 0;
-        for (var j = 0; j < tile.corners.length; ++j)
-        {
+        for (var j = 0; j < tile.corners.length; ++j){
             elevation += tile.corners[j].elevation;
         }
         tile.elevation = elevation / tile.corners.length;
@@ -1448,7 +1440,6 @@ function extrude(planet){
         var normal = t.averagePosition.clone().normalize();
         var offset = normal.clone().multiplyScalar(Math.max(t.elevation,0));
         t.averagePosition.add(offset);
-        
     })
 }
 
@@ -1492,24 +1483,58 @@ function checkKey(e) {
     }
     //G
     else if ((e.keyCode == '71')){
-drawBoundaryBorders(planet.plates)
-    }
-    //Y
-    else if ((e.keyCode == '89')){
-
-        
-
+        //drawBoundaryBorders(planet.plates)
         emptyScene()
         extrude(planet)
         setColors(planet)
         planet.geometry = generatePlanetTiledGeometry(planet);
         drawPlanet(planet);
         addLight();
+    }
+    //Y
+    else if ((e.keyCode == '89')){
+        emptyScene()
+        var elevationBorderQueueSorter = function(left, right) { return left.distanceToPlateBoundary - right.distanceToPlateBoundary; };
+        tiles = planet.tiledTopology.tiles;
+
+        var plates = planet.plates
+        plates.forEach(function(p){
+            p.elevation = getAverageElevation(p)
+            p.driftRate*=2
+        })
+        identifyBoundaryBorders(planet.tiledTopology.borders)
+        var corners = collectBoundaryCorners(planet.tiledTopology.corners)
+        var indexes = calculatePlateBoundaryStress(corners)
+
+
+        blurPlateBoundaryStress(corners,3,0.4)
+
+        var elevationQueue = populateElevationBorderQueue(corners, indexes)
+        processElevationBorderQueue(elevationQueue, elevationBorderQueueSorter);
+
+
+        calculateTileAverageElevations(planet.tiledTopology.tiles);
+
+        setColors(planet)
+        planet.geometry = generatePlanetTiledGeometry(planet);
+        drawPlanet(planet);
+        addLight();
         //drawBoundaryBorders(planet.plates)
         
-
+        console.log("done")
     }
         
+}
+
+function getAverageElevation(plate){
+    var e = 0.0
+    var i = 0.0
+    plate.tiles.forEach(function(t){
+        e+=t.elevation
+        i++
+    })
+    plate.elevation = e/i
+    return e/i
 }
 
 function getMaterial(planet){
@@ -1619,7 +1644,7 @@ function buildTileWedge(f, b, s, t, n){
 
 function randomFromInterval(min,max)
 {
-    return Math.random()*(max-min+1)+min;
+    return Math.random()*(max-min)+min;
 }
 
 function randomUnitVector(random)
@@ -1703,8 +1728,7 @@ function Plate(color, driftAxis, driftRate, spinRate, elevation, oceanic, root)
     this.boundaryBorders = [];
 }
 
-Plate.prototype.calculateMovement = function Plate_calculateMovement(position)
-{
+Plate.prototype.calculateMovement = function Plate_calculateMovement(position){
     var movement = this.driftAxis.clone().cross(position).setLength(this.driftRate * position.clone().projectOnVector(this.driftAxis).distanceTo(position));
     movement.add(this.root.position.clone().cross(position).setLength(this.spinRate * position.clone().projectOnVector(this.root.position).distanceTo(position)));
     return movement.multiplyScalar(1);
