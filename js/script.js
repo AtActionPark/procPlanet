@@ -5,24 +5,30 @@ var renderer;
 var projector;
 var controls;
 var light;
-// array of functions for the rendering loop
 var onRenderFcts = [];
 var Vector3 = THREE.Vector3
+var planet
+var showAirCurrents = false
+var showPlateBoundaries = false
+var showPlateMovements = false
 
-var planet = {};
-var planetMesh;
-var wireframe = false;
-var mode = "tile"
-var renderMode = "elevation"
-var noise
+var subdivisions = 70;
+var distortionRate = 0.8;
+var plateCount = 50;
+var oceanicRate = 0.7;
+var heatLevel = 0.9;
+var moistureLevel = 1;
+
+var extrudeLevel = 45;
+
+var tileborder = 0.05
 
 
+//
 window.onload = function(){
     initializeScene();
-
-    planet = generatePlanet(20,0.5);
+    planet = generatePlanet(subdivisions,distortionRate,plateCount,oceanicRate,heatLevel,moistureLevel, extrudeLevel);
     drawPlanet(planet)
-    //drawEdges(planet)
     renderScene(); 
     console.log(planet)     
 }
@@ -91,13 +97,22 @@ function renderScene(){
 }
 
 
-function generatePlanet(orderLevel,topologyDistortionRate){
+
+
+
+
+//PLANET
+function generatePlanet(subDivisions,topologyDistortionRate, plateCount, oceanicRate,heatLevel,moistureLevel, extrudeLevel){
+    console.log("Generating planet")
     var planet = {};
+    var mesh;
     planet.material = [new THREE.MeshLambertMaterial({ color: new THREE.Color(0x000000), ambient: new THREE.Color(0xFFFFFF), vertexColors: THREE.VertexColors, })];
+
     //generate subdivided icosahedron
-    planet.topology = generateSubdividedIcosahedron(orderLevel);
+    console.log("Generating Mesh")
+    planet.topology = generateSubdividedIcosahedron(subDivisions);
 
-
+    console.log("Distorting Mesh")
     // distort mesh
     var totalDistortion = Math.ceil(planet.topology.edges.length * topologyDistortionRate);
     var remainingIterations = 6;
@@ -106,10 +121,11 @@ function generatePlanet(orderLevel,topologyDistortionRate){
         totalDistortion -= iterationDistortion;
         distortMesh(planet.topology, iterationDistortion);
         relaxMesh(planet.topology, 0.5);
-        --remainingIterations;
+        --remainingIterations; 
     }
-    var intervalIteration = 0
 
+    console.log("Relaxing Mesh")
+    var intervalIteration = 0
     var initialIntervalIteration = intervalIteration;
     
     var averageNodeRadius = Math.sqrt(4 * Math.PI / planet.topology.nodes.length);
@@ -126,54 +142,45 @@ function generatePlanet(orderLevel,topologyDistortionRate){
         {   
             x+=(maxShiftDelta - shiftDelta) / (maxShiftDelta - minShiftDelta)
         }
-        x--
-        console.log("relaxed")
+        x--  
     }
     
     // calculate centroids 
+    console.log("Calculating Centroids")
     centroids(planet.topology)
 
     //reorder triangle nodes
+    console.log("Reordering triangle nodes")
     reorderTriangleNodes(planet.topology)
 
 
     //compute dual polyhedron
+    console.log("Generating topology")
     planet.tiledTopology = generatePlanetTiledTopology(planet.topology);
 
-    //
-    setElevation(planet);
-    setColors(planet)
+    
+    console.log("Generating Planet Terrain")
+    generatePlanetTerrain(planet, plateCount, oceanicRate);
 
-    //compute dual poly geometry
-    planet.geometry = generatePlanetTiledGeometry(planet);
+    extrude(planet, extrudeLevel)
+    console.log("Generating Planet Weather")
+    generatePlanetWeather(planet.tiledTopology,heatLevel,moistureLevel)
+    console.log("Generating Planet Biomes")
+    generatePlanetBiomes(planet.tiledTopology.tiles,1000)
+
+    planet.renderData = generatePlanetRenderData(planet.tiledTopology)
 
     return planet;
 }
 
-
 function drawPlanet(planet){
-    //create mesh
-    planet.mesh = generatePlanetMesh(planet);
-    scene.add(planet.mesh)
+    setSurfaceRenderMode(planet,"terrain")
+    var obj = planet.renderData.surface.renderObject
+    obj.name = "planet"
+    scene.add(obj)
 }
 
-function drawEdges(planet){
-    var material = new THREE.LineBasicMaterial({
-        color: 0x0000ff
-    });
-    var geometry = new THREE.Geometry();
-    var line = new THREE.Line(geometry, material);
 
-    planet.tiledTopology.borders.forEach(function(b){
-        var a = b.corners[0].position;
-        var b = b.corners[1].position;
-        geometry.vertices.push(a);
-        geometry.vertices.push(b); 
-        var line = new THREE.Line(geometry, material);
-        scene.add(line);
-        geometry = new THREE.Geometry();
-    })  
-}
 
 //TOPOLOGY
 function generateIcosahedron(){
@@ -577,8 +584,6 @@ function conditionalRotateEdge(mesh, edgeIndex, predicate){
     face0.e[(farNodeFaceIndex0 + 2) % 3] = edgeIndex;
     face1.e[(farNodeFaceIndex1 + 2) % 3] = edgeIndex;
 
-    console.log("Changed edge")
-    //console.log(planet)
     return true;
 }
 
@@ -795,126 +800,19 @@ function generatePlanetTiledTopology(topology){
         }
     }
 
-    planet.tiledTopology = { corners: corners, borders: borders, tiles: tiles }
     
    return  { corners: corners, borders: borders, tiles: tiles };
 }
 
 
-//GEOMETRY
-function generatePlanetGeometry(planet){
-    
-    var mesh = planet.topology  
-    var geometry = new THREE.Geometry();
 
-    for (var i = 0; i< mesh.nodes.length; i++){
-        geometry.vertices.push(mesh.nodes[i].p);
-    }
-
-    for (var i = 0; i< mesh.faces.length; i++){
-        geometry.faces.push(new THREE.Face3( mesh.faces[i].n[2],   mesh.faces[i].n[0],mesh.faces[i].n[1] ));
-    }
-
-    geometry.computeBoundingSphere();
-    geometry.computeVertexNormals();
-    geometry.computeFaceNormals();
-
-    return geometry;
-}
-
-function generatePlanetTiledGeometry(planet){
-    
-    var geometry = new THREE.Geometry();
-    var tiles = planet.tiledTopology.tiles
-
-    for(var i = 0;i<tiles.length;i++){
-
-        var tile = tiles[i];
-        var baseIndex = geometry.vertices.length;
-        geometry.vertices.push(tile.averagePosition);
-        for (var j = 0; j < tile.corners.length; ++j)
-        {
-            var cornerPosition = tile.corners[j].position;
-            geometry.vertices.push(cornerPosition);
-            geometry.vertices.push(tile.averagePosition.clone().sub(cornerPosition).multiplyScalar(1).add(cornerPosition));
-
-            var i0 = j * 2;
-            var i1 = ((j + 1) % tile.corners.length) * 2;
-
-            buildTileWedge(geometry.faces, baseIndex, i0, i1, tile.normal)
-            for (var k = geometry.faces.length - 3; k < geometry.faces.length; ++k){
-                if (tile.color!= undefined)geometry.faces[k].color = tile.color;
-            } 
-        }
-    }
-
-    planet.geometry = geometry;
-
-    return geometry;
-}
-
-
-//MESH
-function generatePlanetMesh(planet){
-    planet.mesh = new THREE.SceneUtils.createMultiMaterialObject(planet.geometry ,planet.material);
-    return planet.mesh;
-}
-
-
-
-
-//color
-function modifyTileColor(i, color){
-    planet.tiledTopology.tiles[i].color = color
-}
-
-function setColors(planet){
-    var colorDeviance = new THREE.Color(Math.random(), Math.random(), Math.random());
-
-    for(var i = 0; i < planet.tiledTopology.tiles.length;i++){
-        var tile = planet.tiledTopology.tiles[i]
-        if(renderMode == "biome"){
-            if(tile.elevation<0)
-            modifyTileColor(i, new THREE.Color(0x0066FF).lerp(new THREE.Color(0x0044BB), Math.min(-tile.elevation, 1)).lerp(colorDeviance, 0.10))
-        else
-            modifyTileColor(i, new THREE.Color(0xAA9977).lerp(new THREE.Color(0x887755), tile.elevation).lerp(colorDeviance, 0.10))
-        }
-        
-        else if (renderMode == "elevation"){
-            if (tile.elevation <= 0)
-            modifyTileColor(i, new THREE.Color(0x224488).lerp(new THREE.Color(0xAADDFF), Math.max(0, Math.min((tile.elevation + 3/4) / (3/4), 1))))
-
-        else if (tile.elevation < 0.75)
-            modifyTileColor(i, new THREE.Color(0x997755).lerp(new THREE.Color(0x553311), Math.max(0, Math.min((tile.elevation) / (3/4), 1))))
-
-        else
-            modifyTileColor(i,  new THREE.Color(0x553311).lerp(new THREE.Color(0x222222), Math.max(0, Math.min((tile.elevation - 3/4) / (1/2), 1))))
-        }
-        else if (renderMode == "plates"){
-            modifyTileColor(i, tile.plate.color)
-        }
-
-    }
-}
-
-function setElevation(planet){
-    tiles = planet.tiledTopology.tiles;
-    generatePlanetTerrain(planet)
-
-    //for(var i = 0; i < planet.tiledTopology.tiles.length;i++){
-    //    x = planet.tiledTopology.tiles[i].position.x;
-    //   y = planet.tiledTopology.tiles[i].position.y;
-    //    z = planet.tiledTopology.tiles[i].position.z;
-    //    planet.tiledTopology.tiles[i].elevation = noise.simplex3(x , y , z)-0.3;
-    //}
-}
-
-function generatePlanetTerrain(planet){
+//TERRAIN
+function generatePlanetTerrain(planet, plateCount,oceanicRate){
 
     var elevationBorderQueueSorter = function(left, right) { return left.distanceToPlateBoundary - right.distanceToPlateBoundary; };
     tiles = planet.tiledTopology.tiles;
 
-    var plates = generateTectonicPlates(planet,planet.tiledTopology,50,0.7)
+    var plates = generateTectonicPlates(planet,planet.tiledTopology,plateCount,oceanicRate)
     identifyBoundaryBorders(planet.tiledTopology.borders)
     var corners = collectBoundaryCorners(planet.tiledTopology.corners)
     var indexes = calculatePlateBoundaryStress(corners)
@@ -925,15 +823,9 @@ function generatePlanetTerrain(planet){
     var elevationQueue = populateElevationBorderQueue(corners, indexes)
     processElevationBorderQueue(elevationQueue, elevationBorderQueueSorter);
 
-    //planet.tiledTopology.corners.forEach(function(c){
-    //    c.elevation-=2;
-    //})
-
     calculateTileAverageElevations(planet.tiledTopology.tiles);
-    for(var i = 0;i<30;i++)
-        extrude(planet)
+    
 
-    //drawBoundaryBorders(plates)
 }
 
 function generateTectonicPlates(planet,topology, plateCount, oceanicRate){
@@ -1008,7 +900,6 @@ function generateTectonicPlates(planet,topology, plateCount, oceanicRate){
         }
     }
     
-    console.log(plates)
     calculateCornerDistancesToPlateRoot(plates)
     planet.plates = plates
     return plates
@@ -1429,23 +1320,762 @@ function calculateTileAverageElevations(tiles){
     }
 }
 
-function extrude(planet){
-    planet.tiledTopology.corners.forEach(function(c){
-        var normal = c.position.clone().normalize();
-        var offset = normal.clone().multiplyScalar(Math.max(c.elevation,0));
-        c.position.add(offset)
 
-    })
-    planet.tiledTopology.tiles.forEach(function(t){
-        var normal = t.averagePosition.clone().normalize();
-        var offset = normal.clone().multiplyScalar(Math.max(t.elevation,0));
-        t.averagePosition.add(offset);
-    })
+
+//WEATHER
+function generatePlanetWeather(topology, heatLevel, moistureLevel){
+    var planetRadius = 1000;
+    var whorls;
+    var activeCorners;
+    var totalHeat;
+    var remainingHeat;
+    var totalMoisture;
+    var remainingMoisture;
+
+    whorls = generateAirCurrentWhorls(planetRadius)
+    calculateAirCurrents(topology.corners, whorls, planetRadius)
+
+
+    initialHeat = initializeAirHeat(topology.corners,heatLevel )
+
+    activeCorners = initialHeat.corners;
+    totalHeat = initialHeat.airHeat;
+    remainingHeat = initialHeat.airHeat;
+
+    var consumedHeat = processAirHeat(activeCorners);
+    while(remainingHeat > 0 && consumedHeat >= 0.0001){
+        var consumedHeat = processAirHeat(activeCorners);
+        remainingHeat -= consumedHeat;
+    }
+    calculateTemperature(topology.corners, topology.tiles, planetRadius);
+
+
+    initialMoisture = initializeAirMoisture(topology.corners, moistureLevel)
+    
+
+    activeCorners = initialMoisture.corners;
+    totalMoisture = initialMoisture.airMoisture;
+    remainingMoisture = initialMoisture.airMoisture;
+    var consumedMoisture = processAirMoisture(activeCorners);
+
+    while(remainingMoisture > 0 && consumedMoisture >= 0.0001){
+        var consumedMoisture = processAirMoisture(activeCorners);
+        remainingMoisture -= consumedMoisture;
+   }
+    calculateMoisture(topology.corners, topology.tiles)
+}
+
+function generateAirCurrentWhorls(planetRadius){
+    var random = Math.random()
+    var whorls = [];
+    var direction = randomInteger(0, 1) ? 1 : -1;
+    var layerCount = randomInteger(4, 7);
+    var circumference = Math.PI * 2 * planetRadius;
+    var fullRevolution = Math.PI * 2;
+    var baseWhorlRadius = circumference / (2 * (layerCount - 1));
+
+    whorls.push({
+        center: new Vector3(0, planetRadius, 0)
+            .applyAxisAngle(new Vector3(1, 0, 0), randomRealInclusive(0, fullRevolution / (2 * (layerCount + 4))))
+            .applyAxisAngle(new Vector3(0, 1, 0), randomReal(0, fullRevolution)),
+        strength: randomRealInclusive(fullRevolution / 36, fullRevolution / 24) * direction,
+        radius: randomRealInclusive(baseWhorlRadius * 0.8, baseWhorlRadius * 1.2) });
+
+    for (var i = 1; i < layerCount - 1; ++i)
+    {
+        direction = -direction;
+        var baseTilt = i / (layerCount - 1) * fullRevolution / 2;
+        var layerWhorlCount = Math.ceil((Math.sin(baseTilt) * planetRadius * fullRevolution) / baseWhorlRadius);
+        for (var j = 0; j < layerWhorlCount; ++j)
+        {
+            whorls.push({
+                center: new Vector3(0, planetRadius, 0)
+                    .applyAxisAngle(new Vector3(1, 0, 0), randomRealInclusive(0, fullRevolution / (2 * (layerCount + 4))))
+                    .applyAxisAngle(new Vector3(0, 1, 0), randomReal(0, fullRevolution))
+                    .applyAxisAngle(new Vector3(1, 0, 0), baseTilt)
+                    .applyAxisAngle(new Vector3(0, 1, 0), fullRevolution * (j + (i % 2) / 2) / layerWhorlCount),
+                strength: randomRealInclusive(fullRevolution / 48, fullRevolution / 32) * direction,
+                radius: randomRealInclusive(baseWhorlRadius * 0.8, baseWhorlRadius * 1.2) });
+        }
+    }
+
+    direction = -direction;
+    whorls.push({
+        center: new Vector3(0, planetRadius, 0)
+            .applyAxisAngle(new Vector3(1, 0, 0), randomRealInclusive(0, fullRevolution / (2 * (layerCount + 4))))
+            .applyAxisAngle(new Vector3(0, 1, 0), randomReal(0, fullRevolution))
+            .applyAxisAngle(new Vector3(1, 0, 0), fullRevolution / 2),
+        strength: randomRealInclusive(fullRevolution / 36, fullRevolution / 24) * direction,
+        radius: randomRealInclusive(baseWhorlRadius * 0.8, baseWhorlRadius * 1.2) });
+        
+    return whorls;
+}
+
+function calculateAirCurrents(corners, whorls, planetRadius){
+    var i = 0;
+    for(var i = 0;i<corners.length;i++)
+    {
+        if (i >= corners.length) return;
+
+        var corner = corners[i];
+        var airCurrent = new Vector3(0, 0, 0);
+        var weight = 0;
+        for (var j = 0; j < whorls.length; ++j)
+        {
+            var whorl = whorls[j];
+            var angle = whorl.center.angleTo(corner.position);
+            var distance = angle * planetRadius;
+            if (distance < whorl.radius)
+            {
+                var normalizedDistance = distance / whorl.radius;
+                var whorlWeight = 1 - normalizedDistance;
+                var whorlStrength = planetRadius * whorl.strength * whorlWeight * normalizedDistance;
+                var whorlCurrent = whorl.center.clone().cross(corner.position).setLength(whorlStrength);
+                airCurrent.add(whorlCurrent);
+                weight += whorlWeight;
+            }
+        }
+        airCurrent.divideScalar(weight);
+        corner.airCurrent = airCurrent;
+        corner.airCurrentSpeed = airCurrent.length(); //kilometers per hour
+        
+        corner.airCurrentOutflows = new Array(corner.borders.length);
+        var airCurrentDirection = airCurrent.clone().normalize();
+        var outflowSum = 0;
+        for (var j = 0; j < corner.corners.length; ++j)
+        {
+            var vector = corner.vectorTo(corner.corners[j]).normalize();
+            var dot = vector.dot(airCurrentDirection);
+            if (dot > 0)
+            {
+                corner.airCurrentOutflows[j] = dot;
+                outflowSum += dot;
+            }
+            else
+            {
+                corner.airCurrentOutflows[j] = 0;
+            }
+        }
+
+        if (outflowSum > 0)
+        {
+            for (var j = 0; j < corner.borders.length; ++j)
+            {
+                corner.airCurrentOutflows[j] /= outflowSum;
+            }
+        }
+    };
+}
+
+function initializeAirHeat(corners, heatLevel){
+    var activeCorners = [];
+    var airHeat = 0;
+    for (var i = 0; i < corners.length; ++i)
+    {
+        var corner = corners[i];
+        corner.airHeat = corner.area * heatLevel;
+        corner.newAirHeat = 0;
+        corner.heat = 0;
+
+        corner.heatAbsorption = 0.1 * corner.area / Math.max(0.1, Math.min(corner.airCurrentSpeed, 1));
+        if (corner.elevation <= 0)
+        {
+            corner.maxHeat = corner.area;
+        }
+        else
+        {
+            corner.maxHeat = corner.area;
+            corner.heatAbsorption *= 2;
+        }
+        
+        activeCorners.push(corner);
+        airHeat += corner.airHeat;
+    }
+    
+    return{ corners: activeCorners, airHeat: airHeat };
+}
+
+function processAirHeat(activeCorners){
+    var consumedHeat = 0;
+    var activeCornerCount = activeCorners.length;
+    for (var i = 0; i < activeCornerCount; ++i)
+    {
+        var corner = activeCorners[i];
+        if (corner.airHeat === 0) continue;
+        
+        var heatChange = Math.max(0, Math.min(corner.airHeat, corner.heatAbsorption * (1 - corner.heat / corner.maxHeat)));
+        corner.heat += heatChange;
+        consumedHeat += heatChange;
+        var heatLoss = corner.area * (corner.heat / corner.maxHeat) * 0.02;
+        heatChange = Math.min(corner.airHeat, heatChange + heatLoss);
+        
+        var remainingCornerAirHeat = corner.airHeat - heatChange;
+        corner.airHeat = 0;
+        
+        for (var j = 0; j < corner.corners.length; ++j)
+        {
+            var outflow = corner.airCurrentOutflows[j];
+            if (outflow > 0)
+            {
+                corner.corners[j].newAirHeat += remainingCornerAirHeat * outflow;
+                activeCorners.push(corner.corners[j]);
+            }
+        }
+    }
+    
+    activeCorners.splice(0, activeCornerCount);
+    
+    for (var i = 0; i < activeCorners.length; ++i)
+    {
+        var corner = activeCorners[i];
+        corner.airHeat = corner.newAirHeat;
+    }
+    for (var i = 0; i < activeCorners.length; ++i)
+    {
+        activeCorners[i].newAirHeat = 0;
+    }
+    
+    return consumedHeat;
+}
+
+function calculateTemperature(corners, tiles, planetRadius){
+    for (var i = 0; i < corners.length; ++i)
+    {
+        var corner = corners[i];
+        var latitudeEffect = Math.sqrt(Math.max(   1 - Math.abs(corner.position.y) / planetRadius ,0));
+        var elevationEffect = 1 - Math.pow(Math.max(0, Math.min(corner.elevation * 0.8, 1)), 2);
+        var normalizedHeat = corner.heat / corner.area;
+        corner.temperature = (latitudeEffect * elevationEffect * 0.7 + normalizedHeat * 0.3) * 5/3 - 2/3;
+        
+        delete corner.airHeat;
+        delete corner.newAirHeat;
+        delete corner.heat;
+        delete corner.maxHeat;
+        delete corner.heatAbsorption;
+    }
+
+    for (var i = 0; i < tiles.length; ++i)
+    {
+        var tile = tiles[i];
+        tile.temperature = 0;
+        for (var j = 0; j < tile.corners.length; ++j)
+        {
+            tile.temperature += tile.corners[j].temperature;
+        }
+        tile.temperature /= tile.corners.length;
+    }
+}
+
+function initializeAirMoisture(corners, moistureLevel){
+    activeCorners = [];
+    airMoisture = 0;
+    for (var i = 0; i < corners.length; ++i)
+    {
+        var corner = corners[i];
+        corner.airMoisture = (corner.elevation > 0) ? 0 : corner.area * moistureLevel * Math.max(0, Math.min(0.5 + corner.temperature * 0.5, 1));
+        corner.newAirMoisture = 0;
+        corner.precipitation = 0;
+
+        corner.precipitationRate = 0.0075 * corner.area / Math.max(0.1, Math.min(corner.airCurrentSpeed, 1));
+        corner.precipitationRate *= 1 + (1 - Math.max(0, Math.max(corner.temperature, 1))) * 0.1;
+        if (corner.elevation > 0)
+        {
+            corner.precipitationRate *= 1 + corner.elevation * 0.5;
+            corner.maxPrecipitation = corner.area * (0.25 + Math.max(0, Math.min(corner.elevation, 1)) * 0.25);
+        }
+        else
+        {
+            corner.maxPrecipitation = corner.area * 0.25;
+        }
+        
+        activeCorners.push(corner);
+        airMoisture += corner.airMoisture;
+    }
+    return{ corners: activeCorners, airMoisture: airMoisture };
+}
+
+function processAirMoisture(activeCorners){
+    var consumedMoisture = 0;
+    var activeCornerCount = activeCorners.length;
+
+    for (var i = 0; i < activeCornerCount; ++i)
+    {
+        var corner = activeCorners[i];
+
+        if (corner.airMoisture === 0) continue;
+        
+        var moistureChange = Math.max(0, Math.min(corner.airMoisture, corner.precipitationRate * (1 - corner.precipitation / corner.maxPrecipitation)));
+        corner.precipitation += moistureChange;
+        consumedMoisture += moistureChange;
+        var moistureLoss = corner.area * (corner.precipitation / corner.maxPrecipitation) * 0.02;
+        moistureChange = Math.min(corner.airMoisture, moistureChange + moistureLoss);
+        
+        var remainingCornerAirMoisture = corner.airMoisture - moistureChange;
+        corner.airMoisture = 0;
+        
+        for (var j = 0; j < corner.corners.length; ++j)
+        {
+            var outflow = corner.airCurrentOutflows[j];
+            if (outflow > 0)
+            {
+                corner.corners[j].newAirMoisture += remainingCornerAirMoisture * outflow;
+                activeCorners.push(corner.corners[j]);
+
+            }
+        }
+    }
+
+    activeCorners.splice(0, activeCornerCount);
+
+    for (var i = 0; i < activeCorners.length; ++i)
+    {
+        var corner = activeCorners[i];
+        corner.airMoisture = corner.newAirMoisture;
+    }
+    for (var i = 0; i < activeCorners.length; ++i)
+    {
+        activeCorners[i].newAirMoisture = 0;
+    }
+    
+    return consumedMoisture;
+}
+
+function calculateMoisture(corners, tiles){
+    for (var i = 0; i < corners.length; ++i)
+    {
+        var corner = corners[i];
+        corner.moisture = corner.precipitation / corner.area / 0.5;
+        delete corner.airMoisture;
+        delete corner.newAirMoisture;
+        delete corner.precipitation;
+        delete corner.maxPrecipitation;
+        delete corner.precipitationRate;
+    }
+
+    for (var i = 0; i < tiles.length; ++i)
+    {
+        var tile = tiles[i];
+        tile.moisture = 0;
+        for (var j = 0; j < tile.corners.length; ++j)
+        {
+            tile.moisture += tile.corners[j].moisture;
+        }
+        tile.moisture /= tile.corners.length;
+    }
+}
+
+function generatePlanetBiomes(tiles, planetRadius){
+    for (var i = 0; i < tiles.length; ++i)
+    {
+        var tile = tiles[i];
+        var elevation = Math.max(0, tile.elevation);
+        var latitude = Math.abs(tile.position.y / planetRadius);
+        var temperature = tile.temperature;
+        var moisture = tile.moisture;
+        
+        if (elevation <= 0)
+        {
+            if (temperature > 0)
+            {
+                tile.biome = "ocean";
+            }
+            else
+            {
+                tile.biome = "oceanGlacier";
+            }
+        }
+        else if (elevation < 0.6)
+        {
+            if (temperature > 0.75)
+            {
+                if (moisture < 0.25)
+                {
+                    tile.biome = "desert";
+                }
+                else
+                {
+                    tile.biome = "rainForest";
+                }
+            }
+            else if (temperature > 0.5)
+            {
+                if (moisture < 0.25)
+                {
+                    tile.biome = "rocky";
+                }
+                else if (moisture < 0.50)
+                {
+                    tile.biome = "plains";
+                }
+                else
+                {
+                    tile.biome = "swamp";
+                }
+            }
+            else if (temperature > 0)
+            {
+                if (moisture < 0.25)
+                {
+                    tile.biome = "plains";
+                }
+                else if (moisture < 0.50)
+                {
+                    tile.biome = "grassland";
+                }
+                else
+                {
+                    tile.biome = "deciduousForest";
+                }
+            }
+            else
+            {
+                if (moisture < 0.25)
+                {
+                    tile.biome = "tundra";
+                }
+                else
+                {
+                    tile.biome = "landGlacier";
+                }
+            }
+        }
+        else if (elevation < 0.8)
+        {
+            if (temperature > 0)
+            {
+                if (moisture < 0.25)
+                {
+                    tile.biome = "tundra";
+                }
+                else
+                {
+                    tile.biome = "coniferForest";
+                }
+            }
+            else
+            {
+                tile.biome = "tundra";
+            }
+        }
+        else
+        {
+            if (temperature > 0 || moisture < 0.25)
+            {
+                tile.biome = "mountain";
+            }
+            else
+            {
+                tile.biome = "snowyMountain";
+            }
+        }
+    }
 }
 
 
 
+//RENDER
+function generatePlanetRenderData(topology){
+    var renderData = {};
+    console.log("Generating Surface Visuals")
+    renderData.surface = buildSurfaceRenderObject(topology)
+    console.log("Generatingd Plate Boundaries Visuals")
+    renderData.plateBoundaries = buildPlateBoundariesRenderObject(topology.borders)
+    console.log("Generating Plate movement Visuals")
+    renderData.plateMovements = buildPlateMovementsRenderObject(topology.tiles)
+    console.log("Generating Air Current Visuals")
+    renderData.airCurrents = buildAirCurrentsRenderObject(topology.corners)
+   
+    return renderData
+}
 
+function buildSurfaceRenderObject(topology){
+    var planetGeometry = new THREE.Geometry();
+    var terrainColors = [];
+    var plateColors = [];
+    var elevationColors = [];
+    var temperatureColors = [];
+    var moistureColors = [];
+    
+    var i = 0;
+    for(var i = 0;i<topology.tiles.length;i++){
+        if (i >= tiles.length) return;
+        
+        var tile = tiles[i];
+        
+        var colorDeviance = new THREE.Color(randomUnit(), randomUnit(), randomUnit());
+        var terrainColor;
+        if (tile.elevation <= 0)
+        {
+            var normalizedElevation = Math.min(-tile.elevation, 1);
+            if (tile.biome === "ocean") terrainColor = new THREE.Color(0x0066FF).lerp(new THREE.Color(0x0044BB), Math.min(-tile.elevation, 1)).lerp(colorDeviance, 0.10);
+            else if (tile.biome === "oceanGlacier") terrainColor = new THREE.Color(0xDDEEFF).lerp(colorDeviance, 0.10);
+            else terrainColor = new THREE.Color(0xFF00FF);
+        }
+        else if (tile.elevation < 0.6)
+        {
+            var normalizedElevation = tile.elevation / 0.6;
+            if (tile.biome === "desert") terrainColor = new THREE.Color(0xDDDD77).lerp(new THREE.Color(0xBBBB55), normalizedElevation).lerp(colorDeviance, 0.10);
+            else if (tile.biome === "rainForest") terrainColor = new THREE.Color(0x44DD00).lerp(new THREE.Color(0x229900), normalizedElevation).lerp(colorDeviance, 0.20);
+            else if (tile.biome === "rocky") terrainColor = new THREE.Color(0xAA9977).lerp(new THREE.Color(0x887755), normalizedElevation).lerp(colorDeviance, 0.15);
+            else if (tile.biome === "plains") terrainColor = new THREE.Color(0x99BB44).lerp(new THREE.Color(0x667722), normalizedElevation).lerp(colorDeviance, 0.10);
+            else if (tile.biome === "grassland") terrainColor = new THREE.Color(0x77CC44).lerp(new THREE.Color(0x448822), normalizedElevation).lerp(colorDeviance, 0.15);
+            else if (tile.biome === "swamp") terrainColor = new THREE.Color(0x77AA44).lerp(new THREE.Color(0x446622), normalizedElevation).lerp(colorDeviance, 0.25);
+            else if (tile.biome === "deciduousForest") terrainColor = new THREE.Color(0x33AA22).lerp(new THREE.Color(0x116600), normalizedElevation).lerp(colorDeviance, 0.10);
+            else if (tile.biome === "tundra") terrainColor = new THREE.Color(0x9999AA).lerp(new THREE.Color(0x777788), normalizedElevation).lerp(colorDeviance, 0.15);
+            else if (tile.biome === "landGlacier") terrainColor = new THREE.Color(0xDDEEFF).lerp(colorDeviance, 0.10);
+            else terrainColor = new THREE.Color(0xFF00FF);
+        }
+        else if (tile.elevation < 0.8)
+        {
+            var normalizedElevation = (tile.elevation - 0.6) / 0.2;
+            if (tile.biome === "tundra") terrainColor = new THREE.Color(0x777788).lerp(new THREE.Color(0x666677), normalizedElevation).lerp(colorDeviance, 0.10);
+            else if (tile.biome === "coniferForest") terrainColor = new THREE.Color(0x338822).lerp(new THREE.Color(0x116600), normalizedElevation).lerp(colorDeviance, 0.10);
+            else if (tile.biome === "snow") terrainColor = new THREE.Color(0xEEEEEE).lerp(new THREE.Color(0xDDDDDD), normalizedElevation).lerp(colorDeviance, 0.10);
+            else if (tile.biome === "mountain") terrainColor = new THREE.Color(0x555544).lerp(new THREE.Color(0x444433), normalizedElevation).lerp(colorDeviance, 0.05);
+            else terrainColor = new THREE.Color(0xFF00FF);
+        }
+        else
+        {
+            var normalizedElevation = Math.min((tile.elevation - 0.8) / 0.5, 1);
+            if (tile.biome === "mountain") terrainColor = new THREE.Color(0x444433).lerp(new THREE.Color(0x333322), normalizedElevation).lerp(colorDeviance, 0.05);
+            else if (tile.biome === "snowyMountain") terrainColor = new THREE.Color(0xDDDDDD).lerp(new THREE.Color(0xFFFFFF), normalizedElevation).lerp(colorDeviance, 0.10);
+            else terrainColor = new THREE.Color(0xFF00FF);
+        }
+        
+        var plateColor = tile.plate.color.clone();
+
+        var elevationColor;
+        if (tile.elevation <= 0) elevationColor = new THREE.Color(0x224488).lerp(new THREE.Color(0xAADDFF), Math.max(0, Math.min((tile.elevation + 3/4) / (3/4), 1)));
+        else if (tile.elevation < 0.75) elevationColor = new THREE.Color(0x997755).lerp(new THREE.Color(0x553311), Math.max(0, Math.min((tile.elevation) / (3/4), 1)));
+        else elevationColor = new THREE.Color(0x553311).lerp(new THREE.Color(0x222222), Math.max(0, Math.min((tile.elevation - 3/4) / (1/2), 1)));
+
+        var temperatureColor;
+        if (tile.temperature <= 0) temperatureColor = new THREE.Color(0x0000FF).lerp(new THREE.Color(0xBBDDFF), Math.max(0, Math.min((tile.temperature + 2/3) / (2/3), 1)));
+        else temperatureColor = new THREE.Color(0xFFFF00).lerp(new THREE.Color(0xFF0000), Math.max(0, Math.min((tile.temperature) / (3/3), 1)));
+
+        var moistureColor = new THREE.Color(0xFFCC00).lerp(new THREE.Color(0x0066FF), Math.max(0, Math.min(tile.moisture, 1)));
+        
+        var baseIndex = planetGeometry.vertices.length;
+        planetGeometry.vertices.push(tile.averagePosition);
+        for (var j = 0; j < tile.corners.length; ++j)
+        {
+            var cornerPosition = tile.corners[j].position;
+            planetGeometry.vertices.push(cornerPosition);
+            planetGeometry.vertices.push(tile.averagePosition.clone().sub(cornerPosition).multiplyScalar(0.1).add(cornerPosition));
+
+            var i0 = j * 2;
+            var i1 = ((j + 1) % tile.corners.length) * 2;
+            buildTileWedge(planetGeometry.faces, baseIndex, i0, i1, tile.normal);
+            buildTileWedgeColors(terrainColors, terrainColor, terrainColor.clone().multiplyScalar(1-tileborder));
+            buildTileWedgeColors(plateColors, plateColor, plateColor.clone().multiplyScalar(1-tileborder));
+            buildTileWedgeColors(elevationColors, elevationColor, elevationColor.clone().multiplyScalar(1-tileborder));
+            buildTileWedgeColors(temperatureColors, temperatureColor, temperatureColor.clone().multiplyScalar(1-tileborder));
+            buildTileWedgeColors(moistureColors, moistureColor, moistureColor.clone().multiplyScalar(1-tileborder));
+            for (var k = planetGeometry.faces.length - 3; k < planetGeometry.faces.length; ++k) planetGeometry.faces[k].vertexColors = terrainColors[k];
+        }
+    };
+    
+    planetGeometry.dynamic = true;
+    planetGeometry.boundingSphere = new THREE.Sphere(new Vector3(0, 0, 0), 1000);
+    var planetMaterial = new THREE.MeshLambertMaterial({ color: new THREE.Color(0x000000), ambient: new THREE.Color(0xFFFFFF), vertexColors: THREE.VertexColors, });
+    var planetRenderObject = new THREE.Mesh(planetGeometry, planetMaterial);
+    
+    return{
+        geometry: planetGeometry,
+        terrainColors: terrainColors,
+        plateColors: plateColors,
+        elevationColors: elevationColors,
+        temperatureColors: temperatureColors,
+        moistureColors: moistureColors,
+        material: planetMaterial,
+        renderObject: planetRenderObject,
+    };
+}
+
+function rebuildGeometry(topology){
+    var planetGeometry = new THREE.Geometry();
+    var i = 0;
+    for(var i = 0;i<topology.tiles.length;i++){
+        var tile = tiles[i];
+        var baseIndex = planetGeometry.vertices.length;
+        planetGeometry.vertices.push(tile.averagePosition);
+        for (var j = 0; j < tile.corners.length; ++j)
+        {
+            var cornerPosition = tile.corners[j].position;
+            planetGeometry.vertices.push(cornerPosition);
+            planetGeometry.vertices.push(tile.averagePosition.clone().sub(cornerPosition).multiplyScalar(0.1).add(cornerPosition));
+
+            var i0 = j * 2;
+            var i1 = ((j + 1) % tile.corners.length) * 2;
+            buildTileWedge(planetGeometry.faces, baseIndex, i0, i1, tile.normal);
+        }
+    }
+    return planetGeometry
+}
+
+function buildPlateBoundariesRenderObject(borders){
+    var geometry = new THREE.Geometry();
+
+    var i = 0;
+    for(var i = 0;i<borders.length;i++)
+    {
+        if (i >= borders.length) return;
+        
+        var border = borders[i];
+        if (border.betweenPlates)
+        {
+            var normal = border.midpoint.clone().normalize();
+            var offset = normal.clone().multiplyScalar(1);
+
+            var borderPoint0 = border.corners[0].position;
+            var borderPoint1 = border.corners[1].position;
+            var tilePoint0 = border.tiles[0].averagePosition;
+            var tilePoint1 = border.tiles[1].averagePosition;
+            
+            var baseIndex = geometry.vertices.length;
+            geometry.vertices.push(borderPoint0.clone().add(offset));
+            geometry.vertices.push(borderPoint1.clone().add(offset));
+            geometry.vertices.push(tilePoint0.clone().sub(borderPoint0).multiplyScalar(0.2).add(borderPoint0).add(offset));
+            geometry.vertices.push(tilePoint0.clone().sub(borderPoint1).multiplyScalar(0.2).add(borderPoint1).add(offset));
+            geometry.vertices.push(tilePoint1.clone().sub(borderPoint0).multiplyScalar(0.2).add(borderPoint0).add(offset));
+            geometry.vertices.push(tilePoint1.clone().sub(borderPoint1).multiplyScalar(0.2).add(borderPoint1).add(offset));
+            
+            var pressure = Math.max(-1, Math.min((border.corners[0].pressure + border.corners[1].pressure) / 2, 1));
+            var shear = Math.max(0, Math.min((border.corners[0].shear + border.corners[1].shear) / 2, 1));
+            var innerColor = (pressure <= 0) ? new THREE.Color(1 + pressure, 1, 0) : new THREE.Color(1, 1 - pressure, 0);
+            var outerColor = new THREE.Color(0, shear / 2, shear);
+            
+            geometry.faces.push(new THREE.Face3(baseIndex + 0, baseIndex + 1, baseIndex + 2, normal, [ innerColor, innerColor, outerColor ] ));
+            geometry.faces.push(new THREE.Face3(baseIndex + 1, baseIndex + 3, baseIndex + 2, normal, [ innerColor, outerColor, outerColor ] ));
+            geometry.faces.push(new THREE.Face3(baseIndex + 1, baseIndex + 0, baseIndex + 5, normal, [ innerColor, innerColor, outerColor ] ));
+            geometry.faces.push(new THREE.Face3(baseIndex + 0, baseIndex + 4, baseIndex + 5, normal, [ innerColor, outerColor, outerColor ] ));
+        }
+        
+    };
+    
+    geometry.boundingSphere = new THREE.Sphere(new Vector3(0, 0, 0), 1010);
+    var material = new THREE.MeshBasicMaterial({ vertexColors: THREE.VertexColors, });
+    var renderObject = new THREE.Mesh(geometry, material);
+    
+    return{
+        geometry: geometry,
+        material: material,
+        renderObject: renderObject,
+    };
+}
+
+function buildPlateMovementsRenderObject(tiles){
+    var geometry = new THREE.Geometry();
+
+    var i = 0;
+    while(i<tiles.length)
+    {
+        if (i >= tiles.length) return;
+        
+        var tile = tiles[i];
+        var plate = tile.plate;
+        var movement = plate.calculateMovement(tile.position);
+        var plateMovementColor = new THREE.Color(1 - plate.color.r, 1 - plate.color.g, 1 - plate.color.b);
+
+        buildArrow(geometry, tile.position.clone().multiplyScalar(1.002), movement.clone().multiplyScalar(0.5), tile.position.clone().normalize(), Math.min(movement.length(), 4), plateMovementColor);
+        
+        tile.plateMovement = movement;
+        i++
+    };
+
+    geometry.boundingSphere = new THREE.Sphere(new Vector3(0, 0, 0), 1010);
+    var material = new THREE.MeshBasicMaterial({ vertexColors: THREE.VertexColors, });
+    var renderObject = new THREE.Mesh(geometry, material);
+    
+   return{
+        geometry: geometry,
+        material: material,
+        renderObject: renderObject,
+    };
+}
+
+function buildAirCurrentsRenderObject(corners){
+    var geometry = new THREE.Geometry();
+
+    var i = 0;
+    for(var i = 0;i<corners.length;i++){
+        if (i >= corners.length) return;
+        
+        var corner = corners[i];
+        buildArrow(geometry, corner.position.clone().multiplyScalar(1.002), corner.airCurrent.clone().multiplyScalar(0.5), corner.position.clone().normalize(), Math.min(corner.airCurrent.length(), 4));
+    };
+
+    geometry.boundingSphere = new THREE.Sphere(new Vector3(0, 0, 0), 1010);
+    var material = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xFFFFFF), });
+    var renderObject = new THREE.Mesh(geometry, material);
+    
+    return{
+        geometry: geometry,
+        material: material,
+        renderObject: renderObject,
+    };
+}
+
+function buildArrow(geometry, position, direction, normal, baseWidth, color){
+    if (direction.lengthSq() === 0) return;
+    var sideOffset = direction.clone().cross(normal).setLength(baseWidth / 2);
+    var baseIndex = geometry.vertices.length;
+    geometry.vertices.push(position.clone().add(sideOffset), position.clone().add(direction), position.clone().sub(sideOffset));
+    geometry.faces.push(new THREE.Face3(baseIndex, baseIndex + 2, baseIndex + 1, normal, [ color, color, color ]));
+}
+
+function setSurfaceRenderMode(planet, mode){
+
+    surfaceRenderMode = mode;
+
+    var colors;
+    if (mode === "terrain") colors = planet.renderData.surface.terrainColors;
+    else if (mode === "plates") colors = planet.renderData.surface.plateColors;
+    else if (mode === "elevation") colors = planet.renderData.surface.elevationColors;
+    else if (mode === "temperature") colors = planet.renderData.surface.temperatureColors;
+    else if (mode === "moisture") colors = planet.renderData.surface.moistureColors;
+    else colors = planet.renderData.surface.terrainColors;
+
+    var faces = planet.renderData.surface.geometry.faces;
+    for (var i = 0; i < faces.length; ++i)
+    faces[i].vertexColors = colors[i];
+
+    planet.renderData.surface.geometry.colorsNeedUpdate = true;
+}
+
+function showHidePlateBoundaries(show){
+    if (typeof(show) === "boolean") renderPlateBoundaries = show;
+    else renderPlateBoundaries = !renderPlateBoundaries;
+
+    if (!planet) return;
+    
+    if (renderPlateBoundaries) planet.renderData.surface.renderObject.add(planet.renderData.plateBoundaries.renderObject);
+    else planet.renderData.surface.renderObject.remove(planet.renderData.plateBoundaries.renderObject);
+}
+
+function showHidePlateMovements(show){
+    if (typeof(show) === "boolean") renderPlateMovements = show;
+    else renderPlateMovements = !renderPlateMovements;
+
+    if (!planet) return;
+    
+    if (renderPlateMovements) planet.renderData.surface.renderObject.add(planet.renderData.plateMovements.renderObject);
+    else planet.renderData.surface.renderObject.remove(planet.renderData.plateMovements.renderObject);
+}
+
+function showHideAirCurrents(show){
+    if (typeof(show) === "boolean") renderAirCurrents = show;
+    else renderAirCurrents = !renderAirCurrents;
+
+    if (!planet) return;
+    
+    if (renderAirCurrents) planet.renderData.surface.renderObject.add(planet.renderData.airCurrents.renderObject);
+    else planet.renderData.surface.renderObject.remove(planet.renderData.airCurrents.renderObject);
+}
+
+
+
+//CONTROLS
 document.onkeydown = checkKey;
 function checkKey(e) {
 
@@ -1453,54 +2083,79 @@ function checkKey(e) {
 
     // E
     if (e.keyCode == '69') {
-        renderMode = "elevation"
-        emptyScene()
-        setColors(planet)
-        planet.geometry = generatePlanetTiledGeometry(planet);
-        drawPlanet(planet);
-        
-        addLight();
-        
+        setSurfaceRenderMode(planet,"terrain")
     }
     //R
     else if ((e.keyCode == '82')){
-        renderMode = "biome"
-        emptyScene()
-        setColors(planet)
-        planet.geometry = generatePlanetTiledGeometry(planet);
-        drawPlanet(planet);
-        addLight();
+        setSurfaceRenderMode(planet,"elevation")
     }
 
     //T
     else if ((e.keyCode == '84')){
-        renderMode = "plates"
-        emptyScene()
-        setColors(planet)
-        planet.geometry = generatePlanetTiledGeometry(planet);
-        drawPlanet(planet);
-        addLight();
+        setSurfaceRenderMode(planet,"temperature")
     }
-    //G
-    else if ((e.keyCode == '71')){
-        //drawBoundaryBorders(planet.plates)
-        emptyScene()
-        extrude(planet)
-        setColors(planet)
-        planet.geometry = generatePlanetTiledGeometry(planet);
-        drawPlanet(planet);
-        addLight();
-    }
+
     //Y
     else if ((e.keyCode == '89')){
+        setSurfaceRenderMode(planet,"moisture")
+    }
+
+    //U
+    else if ((e.keyCode == '85')){
+        setSurfaceRenderMode(planet,"plates")
+    }  
+
+    //D
+    else if ((e.keyCode == '68')){
+        showPlateBoundaries = !showPlateBoundaries
+        showHidePlateBoundaries(showPlateBoundaries)
+    } 
+
+    //F
+    else if ((e.keyCode == '70')){
+        showPlateMovements = !showPlateMovements
+        showHidePlateMovements(showPlateMovements)
+    } 
+
+    //G
+    else if ((e.keyCode == '71')){
+        showAirCurrents = !showAirCurrents
+        showHideAirCurrents(showAirCurrents)
+    } 
+
+    //H
+    else if ((e.keyCode == '72')){
+        var selectedObject = scene.getObjectByName("planet");
+        scene.remove( selectedObject );
+        console.log("Extrude Planet")
+        extrude(planet, 1)
+        console.log("Rebuild surface")
+        planet.renderData.surface = buildSurfaceRenderObject(planet.tiledTopology)
+        drawPlanet(planet)
+    } 
+
+    //J
+    else if ((e.keyCode == '74')){
+    } 
+    //G
+    else if ((e.keyCode == '00')){
+    }
+    else if ((e.keyCode == '00')){
         emptyScene()
         var elevationBorderQueueSorter = function(left, right) { return left.distanceToPlateBoundary - right.distanceToPlateBoundary; };
         tiles = planet.tiledTopology.tiles;
 
+        
         var plates = planet.plates
         plates.forEach(function(p){
+            var diff = 0
+            diff = p.elevation
             p.elevation = getAverageElevation(p)
-            p.driftRate*=2
+            p.driftRate+=p.driftRate
+            diff -=p.elevation
+            p.tiles.forEach(function(t){
+                t.elevation-=diff
+            })
         })
         identifyBoundaryBorders(planet.tiledTopology.borders)
         var corners = collectBoundaryCorners(planet.tiledTopology.corners)
@@ -1523,74 +2178,12 @@ function checkKey(e) {
         
         console.log("done")
     }
-        
 }
-
-function getAverageElevation(plate){
-    var e = 0.0
-    var i = 0.0
-    plate.tiles.forEach(function(t){
-        e+=t.elevation
-        i++
-    })
-    plate.elevation = e/i
-    return e/i
-}
-
-function getMaterial(planet){
-    if(wireframe){
-        mode == "triangle"? material = materialTriangleWireframe : material = materialTileWireframe
-    }
-    else{
-        mode == "triangle"? material = materialTriangle : material = materialTile
-    }
-    return material
-}
-
-var materialTriangle =          [new THREE.MeshNormalMaterial()];
-var materialTriangleWireframe = [new THREE.MeshNormalMaterial(),
-                                 new THREE.MeshBasicMaterial( { color: 0x000000, shading: THREE.FlatShading, wireframe: true } ) 
-                                ];
-var materialTile =              [new THREE.MeshLambertMaterial({ color: new THREE.Color(0x000000), ambient: new THREE.Color(0xFFFFFF), vertexColors: THREE.VertexColors, })];
-var materialTileWireframe =     [new THREE.MeshLambertMaterial({ color: new THREE.Color(0x000000), ambient: new THREE.Color(0xFFFFFF), vertexColors: THREE.VertexColors, }),
-                                 new THREE.MeshBasicMaterial( { color: 0x000000, shading: THREE.FlatShading, wireframe: true } ) 
-                                ];
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
 
 //HELPERS
-
 function getEdgeOppositeFaceIndex(edge, faceIndex){
     if (edge.f[0] === faceIndex) return edge.f[1];
     if (edge.f[1] === faceIndex) return edge.f[0];
@@ -1642,20 +2235,37 @@ function buildTileWedge(f, b, s, t, n){
     f.push(new THREE.Face3(b + s + 1, b + t + 2, b + s + 2, n));
 }
 
-function randomFromInterval(min,max)
-{
-    return Math.random()*(max-min)+min;
+function buildTileWedgeColors(f, c, bc){
+    f.push([ c, c, c ]);
+    f.push([ bc, bc, c ]);
+    f.push([ bc, c, c ]);
 }
 
-function randomUnitVector(random)
-{
-    var theta = Math.floor(randomFromInterval(0, Math.PI * 2));
-    var phi = Math.acos(Math.floor(randomFromInterval(-1, 1)));
-    var sinPhi = Math.sin(phi);
-    return new Vector3(
-        Math.cos(theta) * sinPhi,
-        Math.sin(theta) * sinPhi,
-        Math.cos(phi));
+function extrude(planet, level){
+    for(var i = 0;i<level;i++){
+        planet.tiledTopology.corners.forEach(function(c){
+            var normal = c.position.clone().normalize();
+            var offset = normal.clone().multiplyScalar(Math.max(c.elevation,0));
+            c.position.add(offset)
+
+        })
+        planet.tiledTopology.tiles.forEach(function(t){
+            var normal = t.averagePosition.clone().normalize();
+            var offset = normal.clone().multiplyScalar(Math.max(t.elevation,0));
+            t.averagePosition.add(offset);
+        })
+    }
+}
+
+function getAverageElevation(plate){
+    var e = 0.0
+    var i = 0.0
+    plate.tiles.forEach(function(t){
+        e+=t.elevation
+        i++
+    })
+
+    return e/i
 }
 
 
@@ -1710,12 +2320,9 @@ function Tile(id, position, cornerCount, borderCount, tileCount){
     this.corners = new Array(cornerCount);
     this.borders = new Array(borderCount);
     this.tiles = new Array(tileCount);
-
-
 }
 
-function Plate(color, driftAxis, driftRate, spinRate, elevation, oceanic, root)
-{
+function Plate(color, driftAxis, driftRate, spinRate, elevation, oceanic, root){
     this.color = color;
     this.driftAxis = driftAxis;
     this.driftRate = driftRate;
@@ -1735,17 +2342,52 @@ Plate.prototype.calculateMovement = function Plate_calculateMovement(position){
 };
 
 
-//
-function emptyScene(planet){
-    for( var i = scene.children.length - 1; i >= 0; i--){
-        obj = scene.children[i];
-        scene.remove(obj);
-    }
+
+//RANDOM
+function randomFromInterval(min,max){
+    return Math.random()*(max-min)+min;
 }
 
+function randomIntFromInterval(min,max){
+    return Math.floor(Math.random()*(max-min+1)+min);
+}
 
+function randomUnitVector(random){
+    var theta = Math.floor(randomFromInterval(0, Math.PI * 2));
+    var phi = Math.acos(Math.floor(randomFromInterval(-1, 1)));
+    var sinPhi = Math.sin(phi);
+    return new Vector3(
+        Math.cos(theta) * sinPhi,
+        Math.sin(theta) * sinPhi,
+        Math.cos(phi));
+}
 
+randomReal = function (min, max){
+    return randomUnit() * (max - min) + min;
+};
 
+randomRealInclusive = function(min, max){
+    return randomUnitInclusive() * (max - min) + min;
+};
 
+randomUnit = function (){
+    return this.randomNext() / 0x80000000;
+};
+randomUnitInclusive = function (){
+    return randomNext() / 0x7FFFFFFF;
+};
 
+randomNext = function(){
+    return Math.random();
+};
+
+randomInteger = function (min, max){
+    return this.randomIntegerExclusive(min, max + 1);
+};
+
+randomIntegerExclusive = function (min, max){
+    min = Math.floor(min);
+    max = Math.floor(max);
+    return Math.floor(this.randomUnit() * (max - min)) + min;
+};
 
