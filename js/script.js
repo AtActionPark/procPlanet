@@ -12,8 +12,8 @@ var showAirCurrents = false
 var showPlateBoundaries = false
 var showPlateMovements = false
 
-var subdivisions = 70;
-var distortionRate = 0.8;
+var subdivisions = 40;
+var distortionRate = 1;
 var plateCount = 50;
 var oceanicRate = 0.7;
 var heatLevel = 0.9;
@@ -22,6 +22,9 @@ var moistureLevel = 1;
 var extrudeLevel = 45;
 
 var tileborder = 0.05
+
+var rotate = false;
+var rotationSpeed = 0.001
 
 
 //
@@ -69,6 +72,7 @@ function addLight(){
 }
 
 function renderScene(){
+    
     // handle window resize
     window.addEventListener('resize', function(){
         renderer.setSize( window.innerWidth, window.innerHeight )
@@ -79,8 +83,9 @@ function renderScene(){
     onRenderFcts.push(function(){
         renderer.render( scene, camera );       
     })
-    
+
     // run the rendering loop
+    var xAxis = new THREE.Vector3(1,1,1);
     var lastTimeMsec= null
     requestAnimationFrame(function animate(nowMsec){
         // keep looping
@@ -93,12 +98,30 @@ function renderScene(){
         onRenderFcts.forEach(function(onRenderFct){
             onRenderFct(deltaMsec/1000, nowMsec/1000)
         })
+        if(rotate)
+        rotateAroundWorldAxis(planet.renderData.surface.renderObject, xAxis, rotationSpeed);;      
+        
     })
 }
 
+// Rotate an object around an arbitrary axis in object space
+var rotObjectMatrix;
+function rotateAroundObjectAxis(object, axis, radians) {
+    rotObjectMatrix = new THREE.Matrix4();
+    rotObjectMatrix.makeRotationAxis(axis.normalize(), radians);
+    object.matrix.multiply(rotObjectMatrix);
+    object.rotation.setFromRotationMatrix(object.matrix);
+}
 
-
-
+var rotWorldMatrix;
+// Rotate an object around an arbitrary axis in world space       
+function rotateAroundWorldAxis(object, axis, radians) {
+    rotWorldMatrix = new THREE.Matrix4();
+    rotWorldMatrix.makeRotationAxis(axis.normalize(), radians);
+    rotWorldMatrix.multiply(object.matrix);                // pre-multiply
+    object.matrix = rotWorldMatrix;
+    object.rotation.setFromRotationMatrix(object.matrix);
+}
 
 
 //PLANET
@@ -162,13 +185,15 @@ function generatePlanet(subDivisions,topologyDistortionRate, plateCount, oceanic
     console.log("Generating Planet Terrain")
     generatePlanetTerrain(planet, plateCount, oceanicRate);
 
-    extrude(planet, extrudeLevel)
+    
     console.log("Generating Planet Weather")
     generatePlanetWeather(planet.tiledTopology,heatLevel,moistureLevel)
     console.log("Generating Planet Biomes")
     generatePlanetBiomes(planet.tiledTopology.tiles,1000)
+    extrude(planet, extrudeLevel)
 
     planet.renderData = generatePlanetRenderData(planet.tiledTopology)
+
 
     return planet;
 }
@@ -824,8 +849,6 @@ function generatePlanetTerrain(planet, plateCount,oceanicRate){
     processElevationBorderQueue(elevationQueue, elevationBorderQueueSorter);
 
     calculateTileAverageElevations(planet.tiledTopology.tiles);
-    
-
 }
 
 function generateTectonicPlates(planet,topology, plateCount, oceanicRate){
@@ -1542,7 +1565,7 @@ function calculateTemperature(corners, tiles, planetRadius){
     for (var i = 0; i < corners.length; ++i)
     {
         var corner = corners[i];
-        var latitudeEffect = Math.sqrt(Math.max(   1 - Math.abs(corner.position.y) / planetRadius ,0));
+        var latitudeEffect = Math.sqrt(1 - Math.abs(corner.position.y) / planetRadius );
         var elevationEffect = 1 - Math.pow(Math.max(0, Math.min(corner.elevation * 0.8, 1)), 2);
         var normalizedHeat = corner.heat / corner.area;
         corner.temperature = (latitudeEffect * elevationEffect * 0.7 + normalizedHeat * 0.3) * 5/3 - 2/3;
@@ -1798,8 +1821,7 @@ function buildSurfaceRenderObject(topology){
     
     var i = 0;
     for(var i = 0;i<topology.tiles.length;i++){
-        if (i >= tiles.length) return;
-        
+
         var tile = tiles[i];
         
         var colorDeviance = new THREE.Color(randomUnit(), randomUnit(), randomUnit());
@@ -1892,26 +1914,6 @@ function buildSurfaceRenderObject(topology){
     };
 }
 
-function rebuildGeometry(topology){
-    var planetGeometry = new THREE.Geometry();
-    var i = 0;
-    for(var i = 0;i<topology.tiles.length;i++){
-        var tile = tiles[i];
-        var baseIndex = planetGeometry.vertices.length;
-        planetGeometry.vertices.push(tile.averagePosition);
-        for (var j = 0; j < tile.corners.length; ++j)
-        {
-            var cornerPosition = tile.corners[j].position;
-            planetGeometry.vertices.push(cornerPosition);
-            planetGeometry.vertices.push(tile.averagePosition.clone().sub(cornerPosition).multiplyScalar(0.1).add(cornerPosition));
-
-            var i0 = j * 2;
-            var i1 = ((j + 1) % tile.corners.length) * 2;
-            buildTileWedge(planetGeometry.faces, baseIndex, i0, i1, tile.normal);
-        }
-    }
-    return planetGeometry
-}
 
 function buildPlateBoundariesRenderObject(borders){
     var geometry = new THREE.Geometry();
@@ -2128,14 +2130,17 @@ function checkKey(e) {
         var selectedObject = scene.getObjectByName("planet");
         scene.remove( selectedObject );
         console.log("Extrude Planet")
-        extrude(planet, 1)
+        extrude(planet, 30)
         console.log("Rebuild surface")
         planet.renderData.surface = buildSurfaceRenderObject(planet.tiledTopology)
+
+
         drawPlanet(planet)
     } 
 
     //J
     else if ((e.keyCode == '74')){
+        rotate = !rotate
     } 
     //G
     else if ((e.keyCode == '00')){
