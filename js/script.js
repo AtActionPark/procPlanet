@@ -1,4 +1,14 @@
-    
+//this is shamelessly stolen from https://experilous.com/1/blog/post/procedural-planet-generation
+// as an exercise in recreating the methodology
+//
+// Copyright © 2014 Andy Gainey <andy@experilous.com>
+//
+// Usage of the works is permitted provided that this instrument 
+// is retained with the works, so that any entity that uses the
+// works is notified of this instrument.
+//
+// DISCLAIMER: THE WORKS ARE WITHOUT WARRANTY.
+
 var scene;
 var camera;
 var renderer;
